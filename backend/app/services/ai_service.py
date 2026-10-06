@@ -53,37 +53,54 @@ def extract_dates(text: str) -> List[Tuple[str, str]]:
         [(original_date_text, YYYY-MM-DD), ...]
     """
 
+    month = (
+        r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
+        r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|"
+        r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
+    )
+    explicit_date = re.compile(
+        rf"\b(?:"
+        rf"\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{month})\s*,?\s*\d{{4}}"
+        rf"|(?:{month})\s+\d{{1,2}}(?:st|nd|rd|th)?\s*,?\s*\d{{4}}"
+        rf")\b",
+        flags=re.IGNORECASE,
+    )
+
     results = []
+    explicit_matches = list(explicit_date.finditer(text))
+    for match in explicit_matches:
+        original = match.group().strip()
+        normalized = re.sub(r"(\d)(st|nd|rd|th)\b", r"\1", original, flags=re.IGNORECASE)
+        normalized = re.sub(r"\s+", " ", normalized.replace(",", " ")).strip()
 
-    try:
-        matches = search_dates(
-            text,
-            languages=["en"],
-            settings={
-                "RETURN_AS_TIMEZONE_AWARE": False,
-                "PREFER_DAY_OF_MONTH": "first",
-            },
-        )
-
-        if not matches:
-            return results
-
-        for original, parsed_date in matches:
-
-            if not parsed_date:
+        parsed_date = None
+        for date_format in ("%d %B %Y", "%d %b %Y", "%B %d %Y", "%b %d %Y"):
+            try:
+                parsed_date = datetime.strptime(normalized, date_format)
+                break
+            except ValueError:
                 continue
 
-            formatted = parsed_date.strftime("%Y-%m-%d")
+        if parsed_date:
+            results.append((original, parsed_date.strftime("%Y-%m-%d")))
 
-            results.append(
-                (
-                    original.strip(),
-                    formatted
-                )
-            )
+    if explicit_matches:
+        return results
 
-    except Exception:
-        pass
+    matches = search_dates(
+        text,
+        languages=["en"],
+        settings={
+            "RETURN_AS_TIMEZONE_AWARE": False,
+            "PREFER_DAY_OF_MONTH": "first",
+        },
+    )
+    if not matches:
+        return results
+
+    for original, parsed_date in matches:
+        if parsed_date:
+            results.append((original.strip(), parsed_date.strftime("%Y-%m-%d")))
 
     return results
 

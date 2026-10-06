@@ -1,10 +1,13 @@
 :root {
   font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
-  color: #172033;
-  background: #f5f7fb;
+  color: #14213d;
+  background: #f7f8fc;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
 }
 
 html,
@@ -16,6 +19,15 @@ body,
 }
 
 button,
-input {
+input,
+select {
   font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid #7ba1f1;
+  outline-offset: 3px;
 }
