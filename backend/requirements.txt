@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+python-multipart
+PyMuPDF
+dateparser
+sqlalchemy
+pyjwt
+bcrypt
+python-dotenv
