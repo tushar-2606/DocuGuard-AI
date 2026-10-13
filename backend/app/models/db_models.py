@@ -37,10 +37,15 @@ class Document(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     filename = Column(String(255), nullable=False)
+    safe_filename = Column(String(255), default="")
     document_type = Column(String(100), nullable=False)
     pages = Column(Integer, default=1)
     text_length = Column(Integer, default=0)
     summary = Column(Text, nullable=False)
+    status = Column(String(50), default="completed")  # pending, completed, failed
+    processing_error = Column(Text, default="")
+    content_hash = Column(String(64), default="", index=True)
+    extraction_warnings = Column(Text, default="")
     upload_timestamp = Column(DateTime, default=datetime.utcnow, index=True)
 
     user = relationship("User", back_populates="documents")
@@ -56,14 +61,20 @@ class Task(Base):
     document_id = Column(Integer, ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     task_text = Column(Text, nullable=False)
+    description = Column(Text, default="")
     deadline = Column(String(100), default="")
-    priority = Column(String(20), default="LOW")
-    category = Column(String(50), default="General")
+    priority = Column(String(20), default="LOW", index=True)
+    category = Column(String(50), default="General", index=True)
     confidence = Column(Float, default=0.5)
-    is_completed = Column(Boolean, default=False)
+    is_completed = Column(Boolean, default=False, index=True)
     detection_reason = Column(Text, default="")
     source_snippet = Column(Text, default="")
+    page_number = Column(Integer, nullable=True)
+    date_explicit = Column(Boolean, default=False)
+    review_status = Column(String(30), default="pending")  # pending, accepted, corrected, rejected
+    extraction_method = Column(String(50), default="rule_based")
     created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     document = relationship("Document", back_populates="tasks")
 
@@ -80,6 +91,7 @@ class Rule(Base):
     confidence = Column(Float, default=0.5)
     detection_reason = Column(Text, default="")
     source_snippet = Column(Text, default="")
+    page_number = Column(Integer, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     document = relationship("Document", back_populates="rules")
@@ -97,6 +109,8 @@ class Deadline(Base):
     confidence = Column(Float, default=0.5)
     detection_reason = Column(Text, default="")
     source_snippet = Column(Text, default="")
+    page_number = Column(Integer, nullable=True)
+    date_explicit = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     document = relationship("Document", back_populates="deadlines")

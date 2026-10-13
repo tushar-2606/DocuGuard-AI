@@ -1,6 +1,6 @@
 from datetime import datetime
-from typing import List, Optional
-from pydantic import BaseModel, Field
+from typing import Dict, List, Optional
+from pydantic import BaseModel, Field, field_validator
 
 
 # --------------------------------------------------
@@ -9,14 +9,32 @@ from pydantic import BaseModel, Field
 
 class UserRegister(BaseModel):
     email: str = Field(..., description="User email address")
-    full_name: str = Field(..., min_length=1, description="Full name of user")
-    password: str = Field(..., min_length=6, description="Password (min 6 characters)")
+    full_name: str = Field(..., min_length=1, max_length=255, description="Full name of user")
+    password: str = Field(..., min_length=8, max_length=128, description="Password (min 8 characters)")
     confirm_password: Optional[str] = Field(None, description="Password confirmation")
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @field_validator("full_name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        cleaned = " ".join(value.split())
+        if not cleaned:
+            raise ValueError("Full name is required.")
+        return cleaned
 
 
 class UserLogin(BaseModel):
     email: str = Field(..., description="User email address")
-    password: str = Field(..., description="User password")
+    password: str = Field(..., min_length=1, max_length=128, description="User password")
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
 
 
 class UserResponse(BaseModel):
@@ -42,6 +60,7 @@ class TokenResponse(BaseModel):
 class ExtractedTask(BaseModel):
     id: Optional[int] = None
     task: str = Field(description="The actionable task the user needs to complete")
+    description: str = Field(default="", description="Optional longer description")
     deadline: str = Field(
         default="",
         description="Deadline in YYYY-MM-DD format, or empty string if not found",
@@ -56,7 +75,7 @@ class ExtractedTask(BaseModel):
     )
     confidence: float = Field(
         default=0.7,
-        description="Confidence score between 0 and 1",
+        description="Heuristic confidence score between 0 and 1 (not a calibrated probability)",
     )
     is_completed: bool = Field(
         default=False,
@@ -69,6 +88,19 @@ class ExtractedTask(BaseModel):
     source_snippet: str = Field(
         default="",
         description="Original text statement from document",
+    )
+    page_number: Optional[int] = Field(default=None, description="1-based page when known")
+    date_explicit: bool = Field(
+        default=False,
+        description="True when deadline came from an explicit calendar date near the action",
+    )
+    review_status: str = Field(
+        default="pending",
+        description="pending, accepted, corrected, or rejected",
+    )
+    extraction_method: str = Field(
+        default="rule_based",
+        description="How the task was extracted (always rule_based in this build)",
     )
 
 
@@ -85,7 +117,7 @@ class ExtractedRule(BaseModel):
     )
     confidence: float = Field(
         default=0.8,
-        description="Confidence score between 0 and 1",
+        description="Heuristic confidence score between 0 and 1",
     )
     detection_reason: str = Field(
         default="",
@@ -95,6 +127,7 @@ class ExtractedRule(BaseModel):
         default="",
         description="Original statement from document",
     )
+    page_number: Optional[int] = None
 
 
 class ExtractedDeadline(BaseModel):
@@ -111,6 +144,8 @@ class ExtractedDeadline(BaseModel):
         default="",
         description="Original text statement from document",
     )
+    page_number: Optional[int] = None
+    date_explicit: bool = Field(default=False)
 
 
 class DocumentAnalysis(BaseModel):
@@ -123,6 +158,10 @@ class DocumentAnalysis(BaseModel):
     tasks: List[ExtractedTask] = Field(default_factory=list)
     rules: List[ExtractedRule] = Field(default_factory=list)
     deadlines: List[ExtractedDeadline] = Field(default_factory=list)
+    warnings: List[str] = Field(
+        default_factory=list,
+        description="Transparent extraction warnings / uncertainty notes",
+    )
 
 
 # --------------------------------------------------
@@ -136,6 +175,7 @@ class DocumentSummaryItem(BaseModel):
     pages: int
     upload_timestamp: datetime
     summary: str
+    status: str = "completed"
     task_count: int
     completed_task_count: int
     rule_count: int
@@ -152,6 +192,9 @@ class DocumentDetailResponse(BaseModel):
     pages: int
     text_length: int
     summary: str
+    status: str = "completed"
+    processing_error: str = ""
+    extraction_warnings: str = ""
     upload_timestamp: datetime
     analysis: DocumentAnalysis
 
@@ -162,6 +205,19 @@ class DocumentDetailResponse(BaseModel):
 class TaskToggleResponse(BaseModel):
     id: int
     is_completed: bool
+
+
+class TaskUpdateRequest(BaseModel):
+    task: Optional[str] = Field(None, min_length=1, max_length=2000)
+    description: Optional[str] = Field(None, max_length=4000)
+    deadline: Optional[str] = Field(None, max_length=32)
+    priority: Optional[str] = Field(None, pattern="^(HIGH|MEDIUM|LOW)$")
+    category: Optional[str] = Field(None, max_length=50)
+    review_status: Optional[str] = Field(
+        None,
+        pattern="^(pending|accepted|corrected|rejected)$",
+    )
+    is_completed: Optional[bool] = None
 
 
 class DeadlineItem(BaseModel):
@@ -175,6 +231,8 @@ class DeadlineItem(BaseModel):
     confidence: float
     detection_reason: str = ""
     source_snippet: str = ""
+    page_number: Optional[int] = None
+    date_explicit: bool = False
 
 
 class RuleItem(BaseModel):
@@ -187,6 +245,7 @@ class RuleItem(BaseModel):
     confidence: float
     detection_reason: str = ""
     source_snippet: str = ""
+    page_number: Optional[int] = None
 
 
 class TaskItem(BaseModel):
@@ -194,6 +253,7 @@ class TaskItem(BaseModel):
     document_id: int
     document_name: str
     task: str
+    description: str = ""
     deadline: str
     priority: str
     category: str
@@ -201,6 +261,10 @@ class TaskItem(BaseModel):
     is_completed: bool
     detection_reason: str = ""
     source_snippet: str = ""
+    page_number: Optional[int] = None
+    date_explicit: bool = False
+    review_status: str = "pending"
+    extraction_method: str = "rule_based"
 
 
 class DashboardStats(BaseModel):
@@ -212,5 +276,8 @@ class DashboardStats(BaseModel):
     mandatory_rules: int
     prohibited_rules: int
     recommended_rules: int
+    tasks_by_priority: Dict[str, int] = Field(default_factory=dict)
+    tasks_by_category: Dict[str, int] = Field(default_factory=dict)
+    documents_failed: int = 0
     recent_documents: List[DocumentSummaryItem]
     upcoming_deadline_items: List[DeadlineItem]

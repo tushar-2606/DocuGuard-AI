@@ -74,27 +74,51 @@ export default function DashboardView({
         </article>
         <article
           className="metric-card red"
-          onClick={() => onNavigate("rules")}
+          onClick={() => onNavigate("deadlines")}
           style={{ cursor: "pointer" }}
         >
           <span className="metric-icon">!</span>
           <span>
-            <small>Mandatory Rules</small>
-            <strong>{stats?.mandatory_rules ?? 0}</strong>
+            <small>Overdue Deadlines</small>
+            <strong>{stats?.overdue_deadlines ?? 0}</strong>
           </span>
         </article>
         <article
           className="metric-card green"
-          onClick={() => onNavigate("rules")}
+          onClick={() => onNavigate("tasks")}
           style={{ cursor: "pointer" }}
         >
           <span className="metric-icon">◈</span>
           <span>
-            <small>Prohibited Rules</small>
-            <strong>{stats?.prohibited_rules ?? 0}</strong>
+            <small>Completed Tasks</small>
+            <strong>{stats?.completed_tasks ?? 0}</strong>
           </span>
         </article>
       </div>
+
+      {hasData && (stats?.tasks_by_priority || stats?.tasks_by_category) ? (
+        <div className="dashboard-distribution" style={{ marginBottom: "1.25rem" }}>
+          <div className="filters-bar-horizontal" style={{ gap: "1.5rem", flexWrap: "wrap" }}>
+            <div>
+              <span className="section-kicker">BY PRIORITY</span>
+              <p style={{ margin: "6px 0 0", fontSize: "13px" }}>
+                {Object.entries(stats.tasks_by_priority || {})
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(" · ") || "No tasks yet"}
+              </p>
+            </div>
+            <div>
+              <span className="section-kicker">BY CATEGORY</span>
+              <p style={{ margin: "6px 0 0", fontSize: "13px" }}>
+                {Object.entries(stats.tasks_by_category || {})
+                  .slice(0, 6)
+                  .map(([k, v]) => `${k}: ${v}`)
+                  .join(" · ") || "No tasks yet"}
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {!hasData ? (
         <div className="empty-state-card">

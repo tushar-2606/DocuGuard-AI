@@ -21,7 +21,12 @@ const getHeaders = (isFormData = false) => {
 async function handleResponse(response) {
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const errorMsg = data?.detail || data?.message || "An unexpected error occurred.";
+    let errorMsg = data?.message || "An unexpected error occurred.";
+    if (typeof data?.detail === "string") {
+      errorMsg = data.detail;
+    } else if (Array.isArray(data?.detail) && data.detail.length) {
+      errorMsg = data.detail.map((e) => e.msg || JSON.stringify(e)).join("; ");
+    }
     throw new Error(errorMsg);
   }
   return data;
@@ -143,6 +148,35 @@ export const api = {
       headers: getHeaders(),
     });
     return handleResponse(res);
+  },
+
+  async updateTask(taskId, updates) {
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify(updates),
+    });
+    return handleResponse(res);
+  },
+
+  async deleteTask(taskId) {
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async exportTasksCsv() {
+    const res = await fetch("/api/dashboard/export/tasks.csv", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || "Failed to export tasks.");
+    }
+    return res.blob();
   },
 
   // Deadlines
