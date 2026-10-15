@@ -9,3 +9,4 @@ bcrypt
 python-dotenv
 pytest
 httpx
+apscheduler>=3.10,<4

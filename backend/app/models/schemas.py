@@ -65,6 +65,10 @@ class ExtractedTask(BaseModel):
         default="",
         description="Deadline in YYYY-MM-DD format, or empty string if not found",
     )
+    deadline_time: str = Field(
+        default="",
+        description="Explicit local time in HH:MM (24-hour) format, or empty if not found",
+    )
     priority: str = Field(
         default="LOW",
         description="HIGH, MEDIUM, or LOW",
@@ -133,6 +137,7 @@ class ExtractedRule(BaseModel):
 class ExtractedDeadline(BaseModel):
     id: Optional[int] = None
     deadline_date: str = Field(description="YYYY-MM-DD format")
+    deadline_time: str = Field(default="", description="Explicit local time in HH:MM format")
     description: str = Field(description="Context or action tied to this deadline")
     is_completed: bool = Field(default=False)
     confidence: float = Field(default=0.8)
@@ -211,6 +216,7 @@ class TaskUpdateRequest(BaseModel):
     task: Optional[str] = Field(None, min_length=1, max_length=2000)
     description: Optional[str] = Field(None, max_length=4000)
     deadline: Optional[str] = Field(None, max_length=32)
+    deadline_time: Optional[str] = Field(None, max_length=5, pattern=r"^$|^(?:[01]\d|2[0-3]):[0-5]\d$")
     priority: Optional[str] = Field(None, pattern="^(HIGH|MEDIUM|LOW)$")
     category: Optional[str] = Field(None, max_length=50)
     review_status: Optional[str] = Field(
@@ -225,6 +231,7 @@ class DeadlineItem(BaseModel):
     document_id: int
     document_name: str
     deadline_date: str
+    deadline_time: str = ""
     description: str
     is_completed: bool
     is_overdue: bool
@@ -255,6 +262,7 @@ class TaskItem(BaseModel):
     task: str
     description: str = ""
     deadline: str
+    deadline_time: str = ""
     priority: str
     category: str
     confidence: float
@@ -265,6 +273,65 @@ class TaskItem(BaseModel):
     date_explicit: bool = False
     review_status: str = "pending"
     extraction_method: str = "rule_based"
+
+
+class ReminderPreferenceUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    desktop_enabled: Optional[bool] = None
+    email_enabled: Optional[bool] = None
+    remind_three_days: Optional[bool] = None
+    remind_one_day: Optional[bool] = None
+    remind_at_deadline: Optional[bool] = None
+    remind_overdue: Optional[bool] = None
+    date_only_time: Optional[str] = Field(
+        None, pattern=r"^(?:[01]\d|2[0-3]):[0-5]\d$"
+    )
+    timezone: Optional[str] = Field(None, min_length=1, max_length=100)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(value.strip())
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError("Use a valid IANA timezone, such as Europe/London.") from exc
+        return value.strip()
+
+
+class ReminderPreferenceItem(BaseModel):
+    enabled: bool
+    desktop_enabled: bool
+    email_enabled: bool
+    remind_three_days: bool
+    remind_one_day: bool
+    remind_at_deadline: bool
+    remind_overdue: bool
+    date_only_time: str
+    timezone: str
+    email_configured: bool
+    desktop_permission_required: bool = True
+    scheduler_interval_seconds: int
+
+
+class NotificationItem(BaseModel):
+    id: int
+    title: str
+    message: str
+    stage: str
+    target_type: str
+    target_id: int
+    document_id: int
+    document_name: str
+    deadline_date: str
+    deadline_time: str
+    is_read: bool
+    created_at: datetime
+    email_status: str
+    email_last_error: str = ""
 
 
 class DashboardStats(BaseModel):

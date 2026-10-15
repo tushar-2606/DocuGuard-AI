@@ -58,6 +58,13 @@ See `backend/.env.example`. Important keys:
 | `DATABASE_URL` | `sqlite:///./docuguard.db` or Postgres URL |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `ENVIRONMENT` | `development` or `production` |
+| `APP_TIMEZONE` | IANA timezone used for new reminder preferences (default `UTC`) |
+| `DEFAULT_DATE_ONLY_REMINDER_TIME` | Local time for deadlines without an explicit time (default `09:00`) |
+| `REMINDER_CHECK_INTERVAL_SECONDS` | Scheduler polling interval; minimum 15 seconds (default `60`) |
+| `ENABLE_REMINDER_SCHEDULER` | Enable the in-process scheduler (default `true`) |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM` | Optional SMTP server and sender for email reminders |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | Optional SMTP credentials; configure both or neither |
+| `SMTP_USE_TLS`, `SMTP_USE_SSL` | SMTP transport security; do not enable both |
 
 Existing local `backend/.env` files are never overwritten by setup docs.
 
@@ -95,9 +102,12 @@ Analysis is **rule-based**. Confidence scores are heuristics for review prioriti
 - No paid LLM / OpenAI dependency in application code.
 - JWT logout is client-side (tokens are not server-revoked).
 - In-memory rate limits do not share state across multiple workers.
-- Email reminders are not implemented.
+- Reminder delivery is scheduled by the running backend; downtime can delay delivery.
+- Desktop alerts require explicit browser permission and are delivered only while the app is open; closed-browser delivery needs a separately configured Web Push service.
+- Email delivery requires valid SMTP settings and per-user opt-in.
 
 ## Documentation
 
 - `docs/IMPLEMENTATION_PLAN.md` — upgrade plan and status
 - `docs/EXTRACTION.md` — extraction behavior and limitations
+- `docs/REMINDERS.md` — reminder scheduling, settings, delivery, and operational limits

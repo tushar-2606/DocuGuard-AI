@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 
-export default function TasksView({ onOpenDocument, onExplainItem }) {
+export default function TasksView({ onOpenDocument, onExplainItem, focusTaskId }) {
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -9,7 +9,12 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
   const [priorityFilter, setPriorityFilter] = useState("");
   const [search, setSearch] = useState("");
   const [editingId, setEditingId] = useState(null);
-  const [editDraft, setEditDraft] = useState({ task: "", deadline: "", priority: "LOW" });
+  const [editDraft, setEditDraft] = useState({
+    task: "",
+    deadline: "",
+    deadline_time: "",
+    priority: "LOW",
+  });
   const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
@@ -35,6 +40,16 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
       isCurrent = false;
     };
   }, [statusFilter, priorityFilter]);
+
+  useEffect(() => {
+    if (loading || !focusTaskId) return undefined;
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`task-card-${focusTaskId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [focusTaskId, loading, tasks]);
 
   const visibleTasks = tasks.filter((task) => {
     if (!search.trim()) return true;
@@ -65,6 +80,7 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
     setEditDraft({
       task: task.task || "",
       deadline: task.deadline || "",
+      deadline_time: task.deadline_time || "",
       priority: task.priority || "LOW",
     });
   };
@@ -75,6 +91,7 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
       const updated = await api.updateTask(taskId, {
         task: editDraft.task.trim(),
         deadline: editDraft.deadline.trim(),
+        deadline_time: editDraft.deadline_time.trim(),
         priority: editDraft.priority,
         review_status: "corrected",
       });
@@ -213,6 +230,7 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
             return (
               <article
                 className={`task-card ${isCompleted ? "completed" : ""}`}
+                id={`task-card-${task.id}`}
                 key={task.id}
               >
                 <div className="task-top">
@@ -248,6 +266,12 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
                         value={editDraft.deadline}
                         onChange={(e) => setEditDraft((d) => ({ ...d, deadline: e.target.value }))}
                         aria-label="Due date"
+                      />
+                      <input
+                        type="time"
+                        value={editDraft.deadline_time}
+                        onChange={(e) => setEditDraft((d) => ({ ...d, deadline_time: e.target.value }))}
+                        aria-label="Due time"
                       />
                       <select
                         value={editDraft.priority}
@@ -285,7 +309,9 @@ export default function TasksView({ onOpenDocument, onExplainItem }) {
                   <div>
                     <span>Deadline</span>
                     <strong>
-                      {task.deadline || "Not specified"}
+                      {task.deadline
+                        ? `${task.deadline}${task.deadline_time ? ` at ${task.deadline_time}` : ""}`
+                        : "Not specified"}
                       {task.date_explicit ? " · explicit" : task.deadline ? " · associated" : ""}
                     </strong>
                   </div>

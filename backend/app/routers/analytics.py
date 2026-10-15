@@ -109,6 +109,7 @@ def get_dashboard_stats(
                     document_id=dl.document_id,
                     document_name=doc_name,
                     deadline_date=dl.deadline_date,
+                    deadline_time=getattr(dl, "deadline_time", "") or "",
                     description=dl.description,
                     is_completed=dl.is_completed,
                     is_overdue=is_overdue,
@@ -170,7 +171,7 @@ def export_tasks_csv(
         .all()
     )
 
-    buffer = io.StringIO()
+    buffer = io.StringIO(newline="")
     writer = csv.writer(buffer)
     writer.writerow(
         [
@@ -186,6 +187,7 @@ def export_tasks_csv(
             "page_number",
             "date_explicit",
             "source_snippet",
+            "deadline_time",
         ]
     )
     for t, doc_name in rows:
@@ -203,6 +205,7 @@ def export_tasks_csv(
                 getattr(t, "page_number", "") or "",
                 "yes" if getattr(t, "date_explicit", False) else "no",
                 _sanitize_csv_cell(t.source_snippet or ""),
+                _sanitize_csv_cell(getattr(t, "deadline_time", "") or ""),
             ]
         )
 

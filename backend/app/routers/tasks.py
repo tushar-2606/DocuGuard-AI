@@ -1,4 +1,5 @@
 from datetime import date, datetime
+import re
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -25,6 +26,7 @@ def _task_to_item(t: Task, doc_name: str) -> TaskItem:
         task=t.task_text,
         description=getattr(t, "description", "") or "",
         deadline=t.deadline or "",
+        deadline_time=getattr(t, "deadline_time", "") or "",
         priority=t.priority,
         category=t.category,
         confidence=t.confidence,
@@ -161,6 +163,16 @@ def update_task(
         task.deadline = deadline
         if deadline:
             task.date_explicit = True
+        else:
+            task.deadline_time = ""
+    if "deadline_time" in data and data["deadline_time"] is not None:
+        deadline_time = data["deadline_time"].strip()
+        if deadline_time and not (data.get("deadline", task.deadline) or ""):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A deadline time requires a calendar date.",
+            )
+        task.deadline_time = deadline_time
     if "priority" in data and data["priority"] is not None:
         task.priority = data["priority"]
     if "category" in data and data["category"] is not None:
@@ -203,6 +215,8 @@ def delete_task(
 def _looks_like_iso_date(value: str) -> bool:
     if value == "":
         return True
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return False
     try:
         datetime.strptime(value, "%Y-%m-%d")
         return True
@@ -241,6 +255,7 @@ def list_deadlines(
                 document_id=dl.document_id,
                 document_name=doc_name,
                 deadline_date=dl.deadline_date,
+                deadline_time=getattr(dl, "deadline_time", "") or "",
                 description=dl.description,
                 is_completed=dl.is_completed,
                 is_overdue=is_overdue,

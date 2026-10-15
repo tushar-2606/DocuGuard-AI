@@ -40,7 +40,10 @@ PAGE_MARKER_RE = re.compile(r"^--- Page (\d+) ---$")
 NEGATION_PATTERNS = [
     r"\bno need (?:to|for)\b",
     r"\bnot required\b",
+    r"\bdon['’]t (?:need to|have to|submit|apply|pay|register|attend)\b",
     r"\bdo not (?:need to|have to|submit|apply|pay|register|attend)\b",
+    r"\b(?:mustn['’]t|shouldn['’]t|should not)\b",
+    r"\b(?:cannot|can['’]t)\b",
     r"\bneed not\b",
     r"\bwithout (?:having to|needing to)\b",
     r"\bexempt(?:ed)? from\b",
@@ -127,18 +130,44 @@ def clean_text(text: str) -> str:
 
 
 def iter_page_lines(text: str) -> List[Tuple[Optional[int], str]]:
-    """Yield (page_number, line) pairs from text with --- Page N --- markers."""
+    """Return sentence-like units with their source page number."""
     current_page: Optional[int] = None
     results: List[Tuple[Optional[int], str]] = []
+    page_lines: List[str] = []
+
+    def flush_page() -> None:
+        if not page_lines:
+            return
+        paragraph = " ".join(line.strip() for line in page_lines if line.strip())
+        protected = re.sub(
+            r"\b(?:e\.g|i\.e|Mr|Mrs|Ms|Dr|Prof)\.",
+            lambda match: match.group().replace(".", "<DOT>"),
+            paragraph,
+            flags=re.IGNORECASE,
+        )
+        for sentence in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9“\"'(])", protected):
+            sentence = sentence.replace("<DOT>", ".").strip()
+            if sentence:
+                results.append((current_page, sentence))
+        page_lines.clear()
+
     for raw in text.split("\n"):
         line = raw.strip()
-        if not line:
-            continue
         marker = PAGE_MARKER_RE.match(line)
         if marker:
+            flush_page()
             current_page = int(marker.group(1))
-            continue
-        results.append((current_page, line))
+        elif re.match(
+            r"^(?:[•\-*]\s+|(?!\d{4}\.\s)\d+[\).]\s+)",
+            line,
+        ):
+            flush_page()
+            page_lines.append(line)
+        elif line:
+            page_lines.append(line)
+        elif page_lines:
+            flush_page()
+    flush_page()
     return results
 
 
@@ -147,22 +176,17 @@ def _is_valid_calendar_date(year: int, month: int, day: int) -> bool:
         return False
     try:
         return day <= calendar.monthrange(year, month)[1]
-    except Exception:
+    except ValueError:
         return False
 
 
-def extract_dates(text: str, allow_relative: bool = False) -> List[Tuple[str, str, bool]]:
-    """
-    Returns list of (original_text, YYYY-MM-DD, is_explicit).
-    Relative dates are only resolved when allow_relative=True AND a trustworthy
-    reference context is provided by the caller (currently unused / off by default).
-    """
+def _explicit_date_pattern() -> re.Pattern:
     month = (
         r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|"
         r"Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|"
         r"Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
     )
-    explicit_date = re.compile(
+    return re.compile(
         rf"\b(?:"
         rf"\d{{1,2}}(?:st|nd|rd|th)?\s+(?:{month})\s*,?\s*\d{{4}}"
         rf"|(?:{month})\s+\d{{1,2}}(?:st|nd|rd|th)?\s*,?\s*\d{{4}}"
@@ -172,15 +196,76 @@ def extract_dates(text: str, allow_relative: bool = False) -> List[Tuple[str, st
         flags=re.IGNORECASE,
     )
 
+
+def _explicit_time_pattern() -> re.Pattern:
+    return re.compile(
+        r"(?<!\d)(\d{1,2})(?::([0-5]\d))?\s*"
+        r"(a\.?m\.?|p\.?m\.?)\b|(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?!\d)",
+        flags=re.IGNORECASE,
+    )
+
+
+def _normalize_explicit_time(text: str) -> Optional[str]:
+    match = _explicit_time_pattern().fullmatch(text.strip())
+    if not match:
+        return None
+    if match.group(4) is not None:
+        hour, minute = int(match.group(4)), int(match.group(5))
+    else:
+        hour = int(match.group(1))
+        minute = int(match.group(2) or 0)
+        meridiem = match.group(3).lower().replace(".", "")
+        if hour < 1 or hour > 12:
+            return None
+        hour = hour % 12 + (12 if meridiem == "pm" else 0)
+    return f"{hour:02d}:{minute:02d}"
+
+
+def _time_near_date(text: str, start: int, end: int) -> str:
+    pattern = _explicit_time_pattern()
+    nearby = [
+        (match, end + match.start())
+        for match in pattern.finditer(text[end : end + 20])
+    ]
+    nearby.extend(
+        (match, start - (len(text[:start]) - match.start()))
+        for match in pattern.finditer(text[max(0, start - 20) : start])
+    )
+    if not nearby:
+        return ""
+    match, _ = min(nearby, key=lambda candidate: abs(candidate[1] - end))
+    return _normalize_explicit_time(match.group()) or ""
+
+
+def _extract_date_details(text: str) -> List[Tuple[str, str, bool, str]]:
+    results = []
+    seen = set()
+    for match in _explicit_date_pattern().finditer(text):
+        original = match.group().strip()
+        normalized = _normalize_explicit_date(original)
+        if not normalized:
+            continue
+        time = _time_near_date(text, match.start(), match.end())
+        key = (normalized, time)
+        if key not in seen:
+            seen.add(key)
+            results.append((original, normalized, True, time))
+    return results
+
+
+def extract_dates(text: str, allow_relative: bool = False) -> List[Tuple[str, str, bool]]:
+    """
+    Returns list of (original_text, YYYY-MM-DD, is_explicit).
+    Relative dates are only resolved when allow_relative=True AND a trustworthy
+    reference context is provided by the caller (currently unused / off by default).
+    """
     results: List[Tuple[str, str, bool]] = []
     seen_iso = set()
 
-    for match in explicit_date.finditer(text):
-        original = match.group().strip()
-        iso = _normalize_explicit_date(original)
-        if iso and iso not in seen_iso:
+    for original, iso, is_explicit, _ in _extract_date_details(text):
+        if iso not in seen_iso:
             seen_iso.add(iso)
-            results.append((original, iso, True))
+            results.append((original, iso, is_explicit))
 
     if results or not allow_relative:
         return results
@@ -221,13 +306,14 @@ def _normalize_explicit_date(original: str) -> Optional[str]:
     slash = re.fullmatch(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", text)
     if slash:
         a, b, y = map(int, slash.groups())
-        # Prefer day/month/year when first part > 12; else assume month/day/year
+        if a <= 12 and b <= 12 and a != b:
+            return None
         if a > 12:
             d, m = a, b
         elif b > 12:
             m, d = a, b
         else:
-            d, m = a, b  # institutional notices often use DD/MM/YYYY
+            d, m = a, b
         if _is_valid_calendar_date(y, m, d):
             return f"{y:04d}-{m:02d}-{d:02d}"
         return None
@@ -245,22 +331,103 @@ def _normalize_explicit_date(original: str) -> Optional[str]:
 
 def find_deadline(text: str) -> Tuple[str, bool]:
     """Return (iso_date, date_explicit) for the first deadline-linked date."""
-    sentences = re.split(r"(?<=[.!?])\s+|\n+", text)
-    for sentence in sentences:
-        lower = sentence.lower()
-        if not any(keyword in lower for keyword in DEADLINE_KEYWORDS):
-            # Also accept "by <date>" near action verbs
-            if not re.search(r"\bby\b.+\d", lower):
-                continue
-        dates = extract_dates(sentence, allow_relative=False)
-        if dates:
-            return dates[0][1], dates[0][2]
+    details = find_deadline_details(text)
+    if details:
+        return details[0], details[1]
     return "", False
 
 
+def find_deadline_details(text: str) -> Tuple[str, bool, str]:
+    """Return a validated date and time only when the text explicitly links them."""
+    date_pattern = _explicit_date_pattern()
+    date_matches = list(date_pattern.finditer(text))
+    candidates = _extract_date_details(text)
+    if len(date_matches) != 1 or len(candidates) != 1:
+        return "", False, ""
+
+    date_match = date_matches[0]
+    has_explicit_link = bool(
+        re.search(
+            rf"\b(?:no later than|on or before|by|before|on)\s+{date_pattern.pattern}",
+            text[: date_match.end()],
+            re.IGNORECASE,
+        )
+    )
+    has_deadline_label = _has_deadline_label_before_date(text, date_pattern)
+    if not (has_explicit_link or has_deadline_label):
+        return "", False, ""
+
+    _, deadline, explicit, deadline_time = candidates[0]
+    return deadline, explicit, deadline_time
+
+
+def _has_deadline_label_before_date(text: str, date_pattern: re.Pattern) -> bool:
+    keywords = "|".join(re.escape(keyword) for keyword in DEADLINE_KEYWORDS)
+    return bool(
+        re.search(
+            rf"\b(?:{keywords})\b[^.!?]{{0,80}}{date_pattern.pattern}",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+def has_ambiguous_calendar_date(text: str) -> bool:
+    """Recognize slash dates whose day/month ordering cannot be inferred safely."""
+    for match in re.finditer(r"\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b", text):
+        first, second = int(match.group(1)), int(match.group(2))
+        if first <= 12 and second <= 12 and first != second:
+            return True
+    return False
+
+
 def is_actionable(sentence: str) -> bool:
+    if any(re.search(pattern, sentence, re.IGNORECASE) for pattern in PROHIBITED_PATTERNS):
+        return False
+
+    if re.search(r"\bcomplete the following activities\b", sentence, re.IGNORECASE):
+        return False
+
     lower = sentence.lower()
-    return any(re.search(pattern, lower) for pattern in ACTION_PATTERNS)
+    for pattern in ACTION_PATTERNS:
+        match = re.search(pattern, lower)
+        if not match:
+            continue
+
+        prefix = lower[: match.start()]
+        directive = bool(
+            re.search(
+                r"\b(?:must|shall|should|need to|are required to|is required to|"
+                r"have to|will|please|requested to)"
+                r"(?:\s+(?:urgently|immediately|promptly|quickly))?\s*$",
+                prefix,
+            )
+        )
+        imperative = not prefix.strip(" \t,;:") and match.start() <= 2
+        subject_action = bool(
+            re.search(r"\b(?:students?|applicants?|employees?|you)\s+$", prefix)
+        )
+        if not (directive or imperative or subject_action):
+            continue
+
+        remainder = sentence[match.end() :]
+        remainder = _explicit_date_pattern().sub(" ", remainder)
+        remainder = _explicit_time_pattern().sub(" ", remainder)
+        remainder = re.sub(
+            r"\b(?:by|before|on|at|due|deadline|date|last|no later than|"
+            r"or before|and|then)\b",
+            " ",
+            remainder,
+            flags=re.IGNORECASE,
+        )
+        object_words = [
+            word
+            for word in re.findall(r"[A-Za-z][A-Za-z'-]*", remainder)
+            if word.lower() not in {"a", "an", "the", "to", "for"}
+        ]
+        if object_words:
+            return True
+    return False
 
 
 def get_action_keyword(sentence: str) -> str:
@@ -279,22 +446,40 @@ def should_skip_sentence(sentence: str) -> Optional[str]:
         return "too_short"
     if any(re.search(p, lower) for p in INTRO_PATTERNS):
         return "introductory"
+    if is_no_obligation(sentence):
+        return "negated"
     if any(re.search(p, lower) for p in NEGATION_PATTERNS):
         return "negated"
     if any(re.search(p, lower) for p in HYPOTHETICAL_PATTERNS):
         return "hypothetical"
-    if any(re.search(p, lower) for p in HISTORICAL_PATTERNS):
+    if any(re.search(p, lower) for p in HISTORICAL_PATTERNS) and not is_actionable(sentence):
         return "historical"
     return None
 
 
+def is_no_obligation(sentence: str) -> bool:
+    return bool(
+        re.search(
+            r"\b(?:do not need to|do not have to|don['’]t need to|"
+            r"don['’]t have to|need not|not required to|"
+            r"no need to|not necessary to|exempt(?:ed)? from)\b",
+            sentence,
+            re.IGNORECASE,
+        )
+    )
+
+
 PROHIBITED_PATTERNS = [
     r"\bmust not\b",
+    r"\bmustn['’]t\b",
     r"\bshall not\b",
     r"\bprohibited\b",
     r"\bstrictly forbidden\b",
     r"\bnot allowed\b",
     r"\bdo not\b",
+    r"\bdon['’]t\b",
+    r"\bshould not\b",
+    r"\bshouldn['’]t\b",
     r"\bnever\b",
     r"\bunder no circumstances\b",
     r"\bwill not be permitted\b",
@@ -328,6 +513,8 @@ RECOMMENDED_PATTERNS = [
 
 def detect_rule(sentence: str) -> Optional[Tuple[str, str, str]]:
     lower = sentence.lower().strip()
+    if is_no_obligation(sentence):
+        return None
     for pattern in PROHIBITED_PATTERNS:
         match = re.search(pattern, lower)
         if match:
@@ -347,33 +534,74 @@ def extract_task(sentence: str) -> str:
     sentence = sentence.strip()
     sentence = re.sub(r"^[\s•\-*]+", "", sentence)
     sentence = re.sub(r"^\d+[\).\s]+", "", sentence)
+    sentence = _explicit_date_pattern().sub("", sentence)
+    sentence = _explicit_time_pattern().sub("", sentence)
     sentence = re.sub(
-        r"\s*(deadline|last date|due date|submit by|apply by|pay by)"
-        r"\s*[:\-]?\s*.*$",
+        r"\b(?:deadline|last date|due date|submission date)\b\s*[:\-]?\s*$",
         "",
         sentence,
         flags=re.IGNORECASE,
     )
+    sentence = sentence.strip(" .,:;-")
+    sentence = re.sub(
+        r"(?:\s+\b(?:by|before|on|at|no later than|on or before)\b)+\s*$",
+        "",
+        sentence,
+        flags=re.IGNORECASE,
+    )
+    sentence = re.sub(r"\s+", " ", sentence)
+    sentence = sentence.strip(" .:-")
+    action_words = "|".join(pattern[2:-2] for pattern in ACTION_PATTERNS)
+    sentence = re.sub(
+        rf"^(?:all\s+)?(?:students?|applicants?|employees?|you)\s+"
+        rf"(?:(?:must|shall|should|need to|have to|are required to|will)\s+)?"
+        rf"(?=(?:{action_words})\b)",
+        "",
+        sentence,
+        flags=re.IGNORECASE,
+    )
+    if sentence:
+        sentence = sentence[0].upper() + sentence[1:]
     sentence = sentence.strip(" .:-")
     if len(sentence) > 180:
         sentence = sentence[:177] + "..."
     return sentence
 
 
-def detect_priority(sentence: str, deadline: str) -> str:
+def split_action_clauses(sentence: str) -> List[str]:
+    actions = "|".join(
+        pattern[2:-2]
+        for pattern in ACTION_PATTERNS
+    )
+    boundary = re.compile(
+        rf"(?:\s+(?:and|then)\s+|\s*;\s*)(?=(?:(?:students?|applicants?|you)\s+)?"
+        rf"(?:(?:must|shall|should|please|need to)\s+)?"
+        rf"(?:(?:urgently|immediately|promptly|quickly)\s+)?(?:{actions})\b)",
+        flags=re.IGNORECASE,
+    )
+    clauses = [part.strip(" ,;") for part in boundary.split(sentence) if part.strip(" ,;")]
+    return clauses or [sentence]
+
+
+def detect_priority(sentence: str, deadline: str, deadline_time: str = "") -> str:
     lower = sentence.lower()
-    high_words = [
-        "mandatory", "compulsory", "urgent", "immediately", "must",
-        "required", "last date", "deadline", "due",
-    ]
-    medium_words = [
-        "important", "recommended", "please", "verify", "complete",
-        "register", "apply", "upload", "pay", "submit",
-    ]
-    if any(word in lower for word in high_words):
+    if re.search(r"\b(?:urgent|immediately|as soon as possible|today|tomorrow)\b", lower):
         return "HIGH"
     if deadline:
-        return "HIGH"
+        try:
+            days_remaining = (datetime.strptime(deadline, "%Y-%m-%d").date() - datetime.now().date()).days
+        except ValueError:
+            days_remaining = None
+        if days_remaining is not None and days_remaining <= 7:
+            return "HIGH"
+
+    medium_words = [
+        "mandatory", "compulsory", "must", "required", "important",
+        "recommended", "please", "verify", "complete", "register",
+        "apply", "upload", "pay", "submit", "deadline", "due",
+    ]
+    if deadline or deadline_time:
+        return "MEDIUM"
     if any(word in lower for word in medium_words):
         return "MEDIUM"
     return "LOW"
@@ -405,29 +633,52 @@ def detect_category(sentence: str) -> str:
 
 def calculate_confidence(sentence: str, deadline: str, date_explicit: bool) -> float:
     """Heuristic score only — not a calibrated probability."""
-    score = 0.50
+    score = 0.35
     if is_actionable(sentence):
         score += 0.15
     if deadline and date_explicit:
-        score += 0.18
+        score += 0.12
     elif deadline:
-        score += 0.08
+        score += 0.05
     if detect_category(sentence) != "General":
         score += 0.08
-    if len(sentence) >= 15:
+    if len(sentence) >= 60:
         score += 0.05
+    elif len(sentence) >= 25:
+        score += 0.03
+    if re.search(r"\b(?:must|shall|should|required to|please)\b", sentence, re.IGNORECASE):
+        score += 0.07
     if should_skip_sentence(sentence):
-        score -= 0.25
-    return max(0.05, min(round(score, 2), 0.95))
+        score -= 0.20
+    return max(0.05, min(round(score, 2), 0.85))
 
 
 def _normalize_for_dedupe(text: str) -> str:
     text = text.lower()
     text = re.sub(r"[^\w\s]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    # Light stemming-style collapse of common variants
-    text = text.replace("registration", "register").replace("submission", "submit")
-    return text
+    tokens = re.sub(r"\s+", " ", text).strip().split()
+    ignored = {
+        "a", "an", "the", "all", "students", "student", "applicant",
+        "applicants", "employee", "employees", "must", "shall", "should",
+        "please", "need", "to", "will",
+    }
+    normalized = [token for token in tokens if token not in ignored]
+    normalized = [
+        {"registration": "register", "submission": "submit"}.get(token, token)
+        for token in normalized
+    ]
+    return " ".join(normalized)
+
+
+def _normalize_rule_for_dedupe(text: str) -> str:
+    text = re.sub(
+        r"^\s*(?:(?:all\s+)?(?:students?|applicants?|employees?|you)\s+)?"
+        r"(?:(?:must|shall|should|are required to|is required to|need to|have to)\s+)",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    return _normalize_for_dedupe(text)
 
 
 def analyze_document(text: str) -> DocumentAnalysis:
@@ -448,24 +699,38 @@ def analyze_document(text: str) -> DocumentAnalysis:
     seen_tasks = set()
     seen_rules = set()
     seen_deadlines = set()
+    standalone_deadlines: List[ExtractedDeadline] = []
+    seen_standalone_deadline_dates = set()
+    seen_date_warnings = set()
     skipped = {"negated": 0, "hypothetical": 0, "historical": 0, "introductory": 0}
 
-    for page_number, line_clean in page_lines:
-        if len(line_clean) < 8:
+    for page_number, sentence in page_lines:
+        if len(sentence) < 8:
             continue
 
-        skip_reason = should_skip_sentence(line_clean)
+        for match in _explicit_date_pattern().finditer(sentence):
+            original_date = match.group().strip()
+            if _normalize_explicit_date(original_date):
+                continue
+            if has_ambiguous_calendar_date(original_date):
+                message = f"Ambiguous date '{original_date}' was left unresolved."
+            else:
+                message = f"Invalid calendar date '{original_date}' was left unresolved."
+            if message not in seen_date_warnings:
+                seen_date_warnings.add(message)
+                warnings.append(message)
 
-        # Rules: allow prohibition/mandatory language even when skip would apply
-        # for tasks (e.g. "must not"), but skip pure historical/intro fluff.
-        rule_info = detect_rule(line_clean)
+        skip_reason = should_skip_sentence(sentence)
+
+        # Preserve compliance prohibitions as rules rather than completion tasks.
+        rule_info = detect_rule(sentence)
         if rule_info and skip_reason not in {"historical", "introductory", "too_short"}:
             rule_type, trigger_keyword, rule_full_text = rule_info
             rule_summary = re.sub(r"^[\s•\-*]+", "", rule_full_text)
             rule_summary = re.sub(r"^\d+[\).\s]+", "", rule_summary).strip()
-            norm_rule = _normalize_for_dedupe(rule_summary)
-            if norm_rule not in seen_rules and len(rule_summary.split()) >= 3:
-                seen_rules.add(norm_rule)
+            rule_key = (rule_type, _normalize_rule_for_dedupe(rule_summary))
+            if rule_key not in seen_rules and len(rule_summary.split()) >= 3:
+                seen_rules.add(rule_key)
                 confidence = 0.90 if rule_type == "PROHIBITED" else 0.85
                 if rule_type == "PROHIBITED":
                     reason = (
@@ -486,10 +751,10 @@ def analyze_document(text: str) -> DocumentAnalysis:
                     ExtractedRule(
                         rule=rule_summary,
                         rule_type=rule_type,
-                        category=detect_category(line_clean),
+                        category=detect_category(sentence),
                         confidence=confidence,
                         detection_reason=reason,
-                        source_snippet=line_clean,
+                        source_snippet=sentence,
                         page_number=page_number,
                     )
                 )
@@ -499,82 +764,123 @@ def analyze_document(text: str) -> DocumentAnalysis:
                 skipped[skip_reason] += 1
             continue
 
-        if is_actionable(line_clean):
-            task_text = extract_task(line_clean)
-            if task_text and len(task_text.split()) >= 3:
-                normalized = _normalize_for_dedupe(task_text)
-                if normalized not in seen_tasks:
-                    seen_tasks.add(normalized)
-                    deadline, date_explicit = find_deadline(line_clean)
-                    priority = detect_priority(line_clean, deadline)
-                    category = detect_category(line_clean)
-                    confidence = calculate_confidence(line_clean, deadline, date_explicit)
-                    action_verb = get_action_keyword(line_clean)
+        found_actionable_task = False
+        for clause in split_action_clauses(sentence):
+            if not is_actionable(clause):
+                continue
+            task_text = extract_task(clause)
+            if not task_text or len(task_text.split()) < 2:
+                continue
 
-                    reason_parts = [f"Detected actionable action verb '{action_verb}'"]
-                    if deadline:
-                        kind = "explicit" if date_explicit else "associated"
-                        reason_parts.append(f"with {kind} deadline '{deadline}'")
-                    if category != "General":
-                        reason_parts.append(f"in category '{category}'")
-                    reason = (
-                        "Detected as an actionable task because the sentence contains "
-                        + ", ".join(reason_parts)
-                        + ". Confidence is a heuristic score, not a calibrated probability."
-                    )
+            found_actionable_task = True
+            deadline, date_explicit, deadline_time = find_deadline_details(clause)
+            normalized = _normalize_for_dedupe(task_text)
+            task_key = (normalized, deadline, deadline_time)
+            if task_key in seen_tasks:
+                continue
+            seen_tasks.add(task_key)
 
-                    tasks.append(
-                        ExtractedTask(
-                            task=task_text,
-                            description="",
-                            deadline=deadline,
-                            priority=priority,
-                            category=category,
+            priority = detect_priority(clause, deadline, deadline_time)
+            category = detect_category(clause)
+            confidence = calculate_confidence(clause, deadline, date_explicit)
+            action_verb = get_action_keyword(clause)
+
+            reason_parts = [f"Detected actionable action verb '{action_verb}'"]
+            if deadline:
+                reason_parts.append(f"with explicit deadline '{deadline}'")
+            elif has_ambiguous_calendar_date(clause):
+                reason_parts.append("with an unresolved ambiguous calendar date")
+            if deadline_time:
+                reason_parts.append(f"at {deadline_time}")
+            if category != "General":
+                reason_parts.append(f"in category '{category}'")
+            reason = (
+                "Detected as an actionable task because the sentence contains "
+                + ", ".join(reason_parts)
+                + ". Confidence is a heuristic review score, not a calibrated estimate."
+            )
+
+            tasks.append(
+                ExtractedTask(
+                    task=task_text,
+                    description="",
+                    deadline=deadline,
+                    deadline_time=deadline_time,
+                    priority=priority,
+                    category=category,
+                    confidence=confidence,
+                    detection_reason=reason,
+                    source_snippet=sentence,
+                    page_number=page_number,
+                    date_explicit=date_explicit,
+                    review_status="pending",
+                    extraction_method="rule_based",
+                )
+            )
+
+            if deadline:
+                deadline_key = (deadline, deadline_time, normalized)
+                if deadline_key not in seen_deadlines:
+                    seen_deadlines.add(deadline_key)
+                    deadlines.append(
+                        ExtractedDeadline(
+                            deadline_date=deadline,
+                            deadline_time=deadline_time,
+                            description=task_text,
                             confidence=confidence,
-                            detection_reason=reason,
-                            source_snippet=line_clean,
+                            detection_reason=f"Detected explicit deadline tied to actionable task '{task_text}'.",
+                            source_snippet=sentence,
                             page_number=page_number,
                             date_explicit=date_explicit,
-                            review_status="pending",
-                            extraction_method="rule_based",
                         )
                     )
 
-                    if deadline and deadline not in seen_deadlines:
-                        seen_deadlines.add(deadline)
-                        deadlines.append(
-                            ExtractedDeadline(
-                                deadline_date=deadline,
-                                description=task_text,
-                                confidence=confidence,
-                                detection_reason=f"Detected deadline tied to actionable task '{task_text}'.",
-                                source_snippet=line_clean,
-                                page_number=page_number,
-                                date_explicit=date_explicit,
-                            )
-                        )
+        standalone_date, standalone_explicit, standalone_time = (
+            find_deadline_details(sentence)
+            if not found_actionable_task
+            else ("", False, "")
+        )
+        if standalone_date and _has_deadline_label_before_date(
+            sentence, _explicit_date_pattern()
+        ):
+            for orig_date, iso_date, is_explicit, deadline_time in _extract_date_details(sentence):
+                if iso_date != standalone_date:
+                    continue
+                if iso_date in seen_standalone_deadline_dates:
+                    continue
+                seen_standalone_deadline_dates.add(iso_date)
+                clean_desc = extract_task(sentence)
+                if len(clean_desc) > 100:
+                    clean_desc = "Overall notice deadline"
+                else:
+                    clean_desc = re.sub(
+                        r"\s+(?:is|are|was|were)\s*$",
+                        "",
+                        clean_desc,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                standalone_deadlines.append(
+                    ExtractedDeadline(
+                        deadline_date=iso_date,
+                        deadline_time=standalone_time or deadline_time,
+                        description=clean_desc or "Notice deadline",
+                        confidence=0.75 if standalone_explicit else 0.55,
+                        detection_reason=(
+                            f"Detected explicit deadline date '{orig_date}' "
+                            "with contextual deadline indicator."
+                        ),
+                        source_snippet=sentence,
+                        page_number=page_number,
+                        date_explicit=standalone_explicit,
+                    )
+                )
 
-        elif any(keyword in line_clean.lower() for keyword in DEADLINE_KEYWORDS):
-            extracted = extract_dates(line_clean, allow_relative=False)
-            if extracted:
-                for orig_date, iso_date, is_explicit in extracted:
-                    if iso_date not in seen_deadlines:
-                        seen_deadlines.add(iso_date)
-                        clean_desc = extract_task(line_clean)
-                        deadlines.append(
-                            ExtractedDeadline(
-                                deadline_date=iso_date,
-                                description=clean_desc if clean_desc else line_clean[:160],
-                                confidence=0.80 if is_explicit else 0.55,
-                                detection_reason=(
-                                    f"Detected {'explicit' if is_explicit else 'parsed'} "
-                                    f"deadline date '{orig_date}' with contextual deadline indicator."
-                                ),
-                                source_snippet=line_clean,
-                                page_number=page_number,
-                                date_explicit=is_explicit,
-                            )
-                        )
+    task_deadline_dates = {task.deadline for task in tasks if task.deadline}
+    deadlines.extend(
+        deadline
+        for deadline in standalone_deadlines
+        if deadline.deadline_date not in task_deadline_dates
+    )
 
     for reason, count in skipped.items():
         if count:

@@ -202,7 +202,9 @@ export default function DashboardView({
                 {stats.upcoming_deadline_items.map((dl) => (
                   <article className="deadline-item-row" key={dl.id}>
                     <div className="deadline-date-pill">
-                      <strong>{dl.deadline_date}</strong>
+                      <strong>
+                        {dl.deadline_date}{dl.deadline_time ? ` at ${dl.deadline_time}` : ""}
+                      </strong>
                       <small>{dl.is_overdue ? "OVERDUE" : "UPCOMING"}</small>
                     </div>
                     <div className="deadline-copy">

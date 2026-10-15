@@ -94,10 +94,12 @@ def ensure_schema_upgrades() -> None:
         _add_column_if_missing("tasks", "extraction_method", "VARCHAR(50) DEFAULT 'rule_based'")
         _add_column_if_missing("tasks", "updated_at", "DATETIME")
         _add_column_if_missing("tasks", "description", "TEXT DEFAULT ''")
+        _add_column_if_missing("tasks", "deadline_time", "VARCHAR(5) DEFAULT ''")
 
     if "deadlines" in tables:
         _add_column_if_missing("deadlines", "page_number", "INTEGER")
         _add_column_if_missing("deadlines", "date_explicit", "BOOLEAN DEFAULT 0")
+        _add_column_if_missing("deadlines", "deadline_time", "VARCHAR(5) DEFAULT ''")
 
     if "rules" in tables:
         _add_column_if_missing("rules", "page_number", "INTEGER")

@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { api } from "../services/api";
 
-export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
+export default function DeadlinesView({
+  onOpenDocument,
+  onExplainItem,
+  focusDeadlineId,
+}) {
   const [deadlines, setDeadlines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,6 +31,16 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
       isCurrent = false;
     };
   }, [statusFilter]);
+
+  useEffect(() => {
+    if (loading || !focusDeadlineId) return undefined;
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`deadline-card-${focusDeadlineId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [deadlines, focusDeadlineId, loading]);
 
   const handleToggle = async (dlId) => {
     try {
@@ -88,11 +102,14 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
           {deadlines.map((dl) => (
             <article
               className={`deadline-card ${dl.is_completed ? "completed" : dl.is_overdue ? "overdue" : ""}`}
+              id={`deadline-card-${dl.id}`}
               key={dl.id}
             >
               <div className="deadline-card-header">
                 <div className="deadline-date-pill large">
-                  <strong>{dl.deadline_date}</strong>
+                  <strong>
+                    {dl.deadline_date}{dl.deadline_time ? ` at ${dl.deadline_time}` : ""}
+                  </strong>
                   <span className={dl.is_overdue ? "badge-overdue" : "badge-upcoming"}>
                     {dl.is_completed ? "COMPLETED" : dl.is_overdue ? "OVERDUE" : "UPCOMING"}
                   </span>

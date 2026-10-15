@@ -1,5 +1,7 @@
 import os
 import sys
+import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
@@ -10,9 +12,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 # Use an isolated SQLite DB for tests before app imports engine
-TEST_DB = BACKEND_ROOT / "test_docuguard.db"
-if TEST_DB.exists():
-    TEST_DB.unlink()
+TEST_DB = Path(tempfile.gettempdir()) / f"docuguard-test-{uuid.uuid4().hex}.db"
 
 os.environ["ENVIRONMENT"] = "development"
 os.environ["JWT_SECRET_KEY"] = "test-secret-key-not-for-production-use-only"
@@ -23,6 +23,11 @@ os.environ["CORS_ORIGINS"] = "http://127.0.0.1:5173"
 
 from app.database import Base, engine, init_db  # noqa: E402
 from app.main import app  # noqa: E402
+
+
+def pytest_sessionfinish(session, exitstatus):
+    engine.dispose()
+    TEST_DB.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

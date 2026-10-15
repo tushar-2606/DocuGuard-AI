@@ -198,6 +198,68 @@ export const api = {
     return handleResponse(res);
   },
 
+  // Reminder preferences and in-app notifications
+  async getReminderPreferences() {
+    const res = await fetch("/api/reminder-preferences", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async updateReminderPreferences(updates) {
+    const res = await fetch("/api/reminder-preferences", {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify(updates),
+    });
+    return handleResponse(res);
+  },
+
+  async listNotifications(limit = 50) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const res = await fetch(`/api/notifications?${params.toString()}`, {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async getUnreadNotificationCount() {
+    const res = await fetch("/api/notifications/unread-count", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async markNotificationRead(notificationId) {
+    const res = await fetch(`/api/notifications/${notificationId}/read`, {
+      method: "PATCH",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async markAllNotificationsRead() {
+    const res = await fetch("/api/notifications/read-all", {
+      method: "PATCH",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async claimDesktopNotification(notificationId) {
+    const res = await fetch(
+      `/api/notifications/${notificationId}/desktop-delivered`,
+      {
+        method: "POST",
+        headers: getHeaders(),
+      },
+    );
+    return handleResponse(res);
+  },
+
   // Rules
   async listRules(ruleType = "") {
     const params = new URLSearchParams();

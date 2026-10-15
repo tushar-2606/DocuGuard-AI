@@ -46,6 +46,27 @@ def test_upload_and_persist_for_owner(client, auth_headers):
     assert len(listed.json()) >= 1
 
 
+def test_repeated_pdf_uploads_remain_separate_documents(client, auth_headers):
+    pdf = _make_pdf("Students must submit the examination form by 15 March 2027.")
+    document_ids = []
+    for _ in range(2):
+        upload = client.post(
+            "/api/documents/upload",
+            headers=auth_headers,
+            files={"file": ("same.pdf", pdf, "application/pdf")},
+        )
+        assert upload.status_code == 200, upload.text
+        document_ids.append(upload.json()["document_id"])
+
+    assert document_ids[0] != document_ids[1]
+    documents = client.get("/api/documents", headers=auth_headers).json()
+    assert {doc["id"] for doc in documents} == set(document_ids)
+    tasks = client.get("/api/tasks", headers=auth_headers).json()
+    matching = [task for task in tasks if task["document_id"] in document_ids]
+    assert len(matching) == 2
+    assert len({task["document_id"] for task in matching}) == 2
+
+
 def test_cross_user_document_access_denied(client, auth_headers, second_user_headers):
     pdf = _make_pdf("Students must register by 01 June 2026.")
     upload = client.post(
@@ -76,6 +97,14 @@ def test_task_toggle_ownership(client, auth_headers, second_user_headers):
 
     denied = client.patch(f"/api/tasks/{task_id}/toggle", headers=second_user_headers)
     assert denied.status_code == 404
+    denied_edit = client.patch(
+        f"/api/tasks/{task_id}",
+        headers=second_user_headers,
+        json={"task": "Steal another user's task"},
+    )
+    assert denied_edit.status_code == 404
+    denied_delete = client.delete(f"/api/tasks/{task_id}", headers=second_user_headers)
+    assert denied_delete.status_code == 404
 
     ok = client.patch(f"/api/tasks/{task_id}/toggle", headers=auth_headers)
     assert ok.status_code == 200
@@ -113,3 +142,100 @@ def test_task_edit_and_delete(client, auth_headers):
     assert deleted.status_code == 200
     remaining = client.get("/api/tasks", headers=auth_headers).json()
     assert all(t["id"] != task_id for t in remaining)
+
+
+def test_task_review_completion_edits_and_relogin_persist(client, auth_headers):
+    pdf = _make_pdf("Students must submit the examination form by 15 March 2027 at 5:30 PM.")
+    upload = client.post(
+        "/api/documents/upload",
+        headers=auth_headers,
+        files={"file": ("persist.pdf", pdf, "application/pdf")},
+    )
+    assert upload.status_code == 200, upload.text
+    task = client.get("/api/tasks", headers=auth_headers).json()[0]
+    task_id = task["id"]
+    assert task["deadline"] == "2027-03-15"
+    assert task["deadline_time"] == "17:30"
+    assert task["source_snippet"]
+    assert task["page_number"] == 1
+    assert task["extraction_method"] == "rule_based"
+    assert task["review_status"] == "pending"
+
+    accepted = client.patch(
+        f"/api/tasks/{task_id}",
+        headers=auth_headers,
+        json={"review_status": "accepted"},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["review_status"] == "accepted"
+
+    completed_once = client.patch(
+        f"/api/tasks/{task_id}/toggle",
+        headers=auth_headers,
+    )
+    assert completed_once.status_code == 200
+    assert completed_once.json()["is_completed"] is True
+    reopened = client.patch(
+        f"/api/tasks/{task_id}/toggle",
+        headers=auth_headers,
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["is_completed"] is False
+
+    rejected = client.patch(
+        f"/api/tasks/{task_id}",
+        headers=auth_headers,
+        json={"review_status": "rejected"},
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["review_status"] == "rejected"
+    assert rejected.json()["is_completed"] is True
+
+    completed = client.patch(f"/api/tasks/{task_id}/toggle", headers=auth_headers)
+    assert completed.status_code == 200
+    assert completed.json()["is_completed"] is False
+
+    edited = client.patch(
+        f"/api/tasks/{task_id}",
+        headers=auth_headers,
+        json={
+            "task": "Submit the corrected examination form",
+            "deadline": "2027-03-16",
+            "deadline_time": "16:45",
+            "review_status": "corrected",
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["task"] == "Submit the corrected examination form"
+    assert edited.json()["deadline"] == "2027-03-16"
+    assert edited.json()["deadline_time"] == "16:45"
+    assert edited.json()["review_status"] == "corrected"
+
+    invalid_date = client.patch(
+        f"/api/tasks/{task_id}",
+        headers=auth_headers,
+        json={"deadline": "2027-02-30"},
+    )
+    assert invalid_date.status_code == 400
+
+    login = client.post(
+        "/api/auth/login",
+        json={"email": "alice@example.com", "password": "securepass1"},
+    )
+    assert login.status_code == 200
+    reauthenticated = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    refreshed = client.get("/api/tasks", headers=reauthenticated)
+    assert refreshed.status_code == 200
+    persisted = next(item for item in refreshed.json() if item["id"] == task_id)
+    assert persisted["task"] == "Submit the corrected examination form"
+    assert persisted["deadline"] == "2027-03-16"
+    assert persisted["deadline_time"] == "16:45"
+    assert persisted["review_status"] == "corrected"
+    assert persisted["is_completed"] is False
+
+    deleted = client.delete(f"/api/tasks/{task_id}", headers=reauthenticated)
+    assert deleted.status_code == 200
+    assert all(
+        item["id"] != task_id
+        for item in client.get("/api/tasks", headers=reauthenticated).json()
+    )

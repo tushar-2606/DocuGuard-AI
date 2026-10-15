@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import "./App.css";
 import AuthModal from "./components/AuthModal";
 import DashboardView from "./components/DashboardView";
 import DeadlinesView from "./components/DeadlinesView";
 import DocumentsView from "./components/DocumentsView";
 import ExplainModal from "./components/ExplainModal";
+import NotificationsCenter from "./components/NotificationsCenter";
 import ProfileModal from "./components/ProfileModal";
+import ReminderSettingsView from "./components/ReminderSettingsView";
 import RulesView from "./components/RulesView";
 import TasksView from "./components/TasksView";
 import { api, getStoredToken } from "./services/api";
@@ -24,6 +26,7 @@ function App() {
   const [sortBy, setSortBy] = useState("priority");
   const [isDragging, setIsDragging] = useState(false);
   const [analysisActiveTab, setAnalysisActiveTab] = useState("tasks");
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   // SaaS Workspace & Auth State
   const [currentUser, setCurrentUser] = useState(null);
@@ -39,6 +42,7 @@ function App() {
   const [explainItem, setExplainItem] = useState(null);
   const [explainType, setExplainType] = useState("Task");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [focusedReminder, setFocusedReminder] = useState(null);
 
   // Theme
   const [theme, setTheme] = useState(
@@ -113,12 +117,29 @@ function App() {
   }, [analysis]);
 
   const scrollToUpload = () => {
-    if (activeView !== "home" && activeView !== "workspace") {
+    if (loading) return;
+    setUploadOpen(true);
+    setFile(null);
+    setError("");
+    if (currentUser && activeView !== "workspace") {
       setActiveView("workspace");
+    } else if (!currentUser && activeView !== "home") {
+      setActiveView("home");
     }
     setTimeout(() => {
       uploadRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 50);
+  };
+
+  const navigateTo = (view) => {
+    if (loading) return;
+    if (view !== "workspace") setUploadOpen(false);
+    if (view !== "workspace") {
+      setFile(null);
+      setError("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+    setActiveView(view);
   };
 
   const selectFile = (candidate) => {
@@ -138,9 +159,6 @@ function App() {
 
     setFile(candidate);
     setError("");
-    setAnalysis(null);
-    setDocumentInfo(null);
-    setCompletedTasks(new Set());
   };
 
   const uploadDocument = async () => {
@@ -151,9 +169,6 @@ function App() {
 
     setLoading(true);
     setError("");
-    setAnalysis(null);
-    setDocumentInfo(null);
-    setCompletedTasks(new Set());
 
     try {
       const data = await api.uploadDocument(file);
@@ -169,6 +184,10 @@ function App() {
         is_saved: data.is_saved,
       });
       setAnalysis(data.analysis);
+      setCompletedTasks(new Set());
+      setFile(null);
+      setUploadOpen(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
 
       if (currentUser) {
         loadDashboardStats();
@@ -195,6 +214,7 @@ function App() {
         is_saved: true,
       });
       setAnalysis(doc.analysis);
+      setUploadOpen(false);
 
       // Populate completed tasks
       const completedSet = new Set();
@@ -203,7 +223,7 @@ function App() {
       });
       setCompletedTasks(completedSet);
 
-      setActiveView("home"); // Show in home/analysis view
+      setActiveView(currentUser ? "workspace" : "home");
     } catch (err) {
       alert(err.message || "Could not open document.");
     } finally {
@@ -218,13 +238,9 @@ function App() {
   };
 
   const resetDocument = () => {
-    setAnalysis(null);
-    setDocumentInfo(null);
+    if (loading) return;
     setFile(null);
     setError("");
-    setCompletedTasks(new Set());
-    setFilter("ALL");
-    setSortBy("priority");
     scrollToUpload();
   };
 
@@ -251,6 +267,15 @@ function App() {
     setExplainType(itemType);
     setExplainModalOpen(true);
   };
+
+  const handleOpenReminderTarget = useCallback((item) => {
+    setFocusedReminder({
+      type: item.target_type,
+      id: item.target_id,
+    });
+    setUploadOpen(false);
+    setActiveView(item.target_type === "task" ? "tasks" : "deadlines");
+  }, []);
 
   const handleAuthSuccess = (user) => {
     setCurrentUser(user);
@@ -307,35 +332,35 @@ function App() {
             <>
               <button
                 className={`nav-tab-btn ${activeView === "workspace" ? "active" : ""}`}
-                onClick={() => setActiveView("workspace")}
+                onClick={() => navigateTo("workspace")}
                 type="button"
               >
                 Workspace
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "documents" ? "active" : ""}`}
-                onClick={() => setActiveView("documents")}
+                onClick={() => navigateTo("documents")}
                 type="button"
               >
                 Documents
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "tasks" ? "active" : ""}`}
-                onClick={() => setActiveView("tasks")}
+                onClick={() => navigateTo("tasks")}
                 type="button"
               >
                 Tasks
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "deadlines" ? "active" : ""}`}
-                onClick={() => setActiveView("deadlines")}
+                onClick={() => navigateTo("deadlines")}
                 type="button"
               >
                 Deadlines
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "rules" ? "active" : ""}`}
-                onClick={() => setActiveView("rules")}
+                onClick={() => navigateTo("rules")}
                 type="button"
               >
                 Rules
@@ -358,6 +383,12 @@ function App() {
         </nav>
 
         <div className="header-actions">
+          {currentUser && (
+            <NotificationsCenter
+              onOpenTarget={handleOpenReminderTarget}
+              onOpenDocument={handleOpenSavedDocument}
+            />
+          )}
           <button className="theme-toggle" onClick={toggleTheme} type="button">
             {theme === "arctic" ? "◐ Cyber" : "☀ Arctic"}
           </button>
@@ -383,11 +414,20 @@ function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveView("workspace");
+                      navigateTo("workspace");
                       setUserMenuOpen(false);
                     }}
                   >
                     📊 Workspace Dashboard
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigateTo("settings");
+                      setUserMenuOpen(false);
+                    }}
+                  >
+                    🔔 Reminder Settings
                   </button>
                   <button
                     type="button"
@@ -419,11 +459,21 @@ function App() {
           )}
 
           {analysis ? (
-            <button className="header-cta" onClick={resetDocument} type="button">
+            <button
+              className="header-cta"
+              disabled={loading}
+              onClick={resetDocument}
+              type="button"
+            >
               + New Document
             </button>
           ) : (
-            <button className="header-cta" onClick={scrollToUpload} type="button">
+            <button
+              className="header-cta"
+              disabled={loading}
+              onClick={scrollToUpload}
+              type="button"
+            >
               Upload PDF
             </button>
           )}
@@ -439,7 +489,7 @@ function App() {
             loading={statsLoading}
             onQuickUploadClick={scrollToUpload}
             onOpenDocument={handleOpenSavedDocument}
-            onNavigate={(v) => setActiveView(v)}
+            onNavigate={navigateTo}
             onExplainItem={handleExplain}
           />
         )}
@@ -457,6 +507,7 @@ function App() {
           <TasksView
             onOpenDocument={handleOpenSavedDocument}
             onExplainItem={handleExplain}
+            focusTaskId={focusedReminder?.type === "task" ? focusedReminder.id : null}
           />
         )}
 
@@ -465,8 +516,13 @@ function App() {
           <DeadlinesView
             onOpenDocument={handleOpenSavedDocument}
             onExplainItem={handleExplain}
+            focusDeadlineId={
+              focusedReminder?.type === "deadline" ? focusedReminder.id : null
+            }
           />
         )}
+
+        {currentUser && activeView === "settings" && <ReminderSettingsView />}
 
         {/* VIEW 5: GLOBAL RULES */}
         {currentUser && activeView === "rules" && (
@@ -573,7 +629,7 @@ function App() {
             )}
 
             {/* Document Workspace Upload & Drop Zone */}
-            <section
+            {uploadOpen && <section
               className="workspace-section page-width"
               id="workspace"
               ref={uploadRef}
@@ -593,6 +649,18 @@ function App() {
                         : " Sign in to persist your documents and deadlines."}
                     </p>
                   </div>
+                  <button
+                    className="text-button upload-close-button"
+                    disabled={loading}
+                    onClick={() => {
+                    setUploadOpen(false);
+                    setFile(null);
+                    setError("");
+                    }}
+                    type="button"
+                  >
+                    Close
+                  </button>
                 </div>
 
                 <label
@@ -610,6 +678,7 @@ function App() {
                   onDrop={(event) => {
                     event.preventDefault();
                     setIsDragging(false);
+                    if (loading) return;
                     selectFile(event.dataTransfer.files[0]);
                   }}
                 >
@@ -617,8 +686,9 @@ function App() {
                     ref={fileInputRef}
                     type="file"
                     accept="application/pdf,.pdf"
+                    disabled={loading}
                     onChange={(event) => {
-                      selectFile(event.target.files[0]);
+                      if (!loading) selectFile(event.target.files[0]);
                       event.target.value = "";
                     }}
                   />
@@ -643,6 +713,7 @@ function App() {
                     </div>
                     <button
                       aria-label="Remove selected file"
+                      disabled={loading}
                       onClick={() => {
                         setFile(null);
                         setError("");
@@ -699,12 +770,13 @@ function App() {
                   </div>
                 </div>
               </div>
-            </section>
+            </section>}
           </>
         )}
 
         {/* ANALYSIS RESULTS SECTION */}
-        {analysis && (
+        {analysis &&
+          (activeView === "home" || activeView === "workspace") && (
           <section
             className="results-section page-width"
             id="results"
@@ -724,7 +796,12 @@ function App() {
                     : " · Ephemeral (Sign in to save)"}
                 </p>
               </div>
-              <button className="text-button" onClick={resetDocument} type="button">
+              <button
+                className="text-button"
+                disabled={loading}
+                onClick={resetDocument}
+                type="button"
+              >
                 Analyze another PDF <span aria-hidden="true">→</span>
               </button>
             </div>
@@ -871,8 +948,11 @@ function App() {
                               {priority}
                             </span>
                             <div className="task-top-right">
-                              <span className="confidence">
-                                {Math.round((task.confidence ?? 0) * 100)}% confidence
+                              <span
+                                className="confidence"
+                                title="Heuristic review score, not a calibrated probability"
+                              >
+                                {Math.round((task.confidence ?? 0) * 100)}% heuristic
                               </span>
                               <button
                                 className="why-link"
@@ -887,7 +967,11 @@ function App() {
                           <div className="task-info">
                             <div>
                               <span>Deadline</span>
-                              <strong>{task.deadline || "Not specified"}</strong>
+                              <strong>
+                                {task.deadline
+                                  ? `${task.deadline}${task.deadline_time ? ` at ${task.deadline_time}` : ""}`
+                                  : "Not specified"}
+                              </strong>
                             </div>
                             <div>
                               <span>Category</span>
