@@ -21,7 +21,15 @@ const getHeaders = (isFormData = false) => {
 async function handleResponse(response) {
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const errorMsg = data?.detail || data?.message || "An unexpected error occurred.";
+    if (response.status >= 502 && response.status <= 504) {
+      throw new Error("Unable to connect to DocuGuard AI backend. Please verify the Python server is running on port 8000.");
+    }
+    let errorMsg = data?.message || (response.status === 404 ? "Requested endpoint not found." : "An unexpected error occurred.");
+    if (typeof data?.detail === "string") {
+      errorMsg = data.detail;
+    } else if (Array.isArray(data?.detail) && data.detail.length) {
+      errorMsg = data.detail.map((e) => e.msg || JSON.stringify(e)).join("; ");
+    }
     throw new Error(errorMsg);
   }
   return data;
@@ -145,6 +153,35 @@ export const api = {
     return handleResponse(res);
   },
 
+  async updateTask(taskId, updates) {
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify(updates),
+    });
+    return handleResponse(res);
+  },
+
+  async deleteTask(taskId) {
+    const res = await fetch(`/api/tasks/${taskId}`, {
+      method: "DELETE",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async exportTasksCsv() {
+    const res = await fetch("/api/dashboard/export/tasks.csv", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => null);
+      throw new Error(data?.detail || "Failed to export tasks.");
+    }
+    return res.blob();
+  },
+
   // Deadlines
   async listDeadlines(status = "") {
     const params = new URLSearchParams();
@@ -161,6 +198,68 @@ export const api = {
       method: "PATCH",
       headers: getHeaders(),
     });
+    return handleResponse(res);
+  },
+
+  // Reminder preferences and in-app notifications
+  async getReminderPreferences() {
+    const res = await fetch("/api/reminder-preferences", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async updateReminderPreferences(updates) {
+    const res = await fetch("/api/reminder-preferences", {
+      method: "PATCH",
+      headers: getHeaders(),
+      body: JSON.stringify(updates),
+    });
+    return handleResponse(res);
+  },
+
+  async listNotifications(limit = 50) {
+    const params = new URLSearchParams({ limit: String(limit) });
+    const res = await fetch(`/api/notifications?${params.toString()}`, {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async getUnreadNotificationCount() {
+    const res = await fetch("/api/notifications/unread-count", {
+      method: "GET",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async markNotificationRead(notificationId) {
+    const res = await fetch(`/api/notifications/${notificationId}/read`, {
+      method: "PATCH",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async markAllNotificationsRead() {
+    const res = await fetch("/api/notifications/read-all", {
+      method: "PATCH",
+      headers: getHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async claimDesktopNotification(notificationId) {
+    const res = await fetch(
+      `/api/notifications/${notificationId}/desktop-delivered`,
+      {
+        method: "POST",
+        headers: getHeaders(),
+      },
+    );
     return handleResponse(res);
   },
 

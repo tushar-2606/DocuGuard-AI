@@ -16,7 +16,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-py -c "import fastapi, uvicorn, fitz, dateparser" >nul 2>&1
+py -c "import fastapi, uvicorn, fitz, dateparser, apscheduler, sqlalchemy, jwt" >nul 2>&1
 if errorlevel 1 (
   echo Installing backend dependencies...
   py -m pip install -r "%ROOT%backend\requirements.txt"

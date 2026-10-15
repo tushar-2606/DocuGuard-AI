@@ -1,11 +1,41 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Shield,
+  FileText,
+  CheckCircle2,
+  Clock,
+  Sparkles,
+  UploadCloud,
+  Sun,
+  Moon,
+  ChevronDown,
+  LogOut,
+  User,
+  LayoutDashboard,
+  Bell,
+  FilePlus,
+  ArrowRight,
+  Check,
+  CheckSquare,
+  AlertTriangle,
+  Layers,
+  ShieldCheck,
+  Scale,
+  Calendar,
+  X,
+  Building2,
+  FileSearch,
+  Cpu,
+} from "lucide-react";
 import "./App.css";
 import AuthModal from "./components/AuthModal";
 import DashboardView from "./components/DashboardView";
 import DeadlinesView from "./components/DeadlinesView";
 import DocumentsView from "./components/DocumentsView";
 import ExplainModal from "./components/ExplainModal";
+import NotificationsCenter from "./components/NotificationsCenter";
 import ProfileModal from "./components/ProfileModal";
+import ReminderSettingsView from "./components/ReminderSettingsView";
 import RulesView from "./components/RulesView";
 import TasksView from "./components/TasksView";
 import { api, getStoredToken } from "./services/api";
@@ -24,12 +54,14 @@ function App() {
   const [sortBy, setSortBy] = useState("priority");
   const [isDragging, setIsDragging] = useState(false);
   const [analysisActiveTab, setAnalysisActiveTab] = useState("tasks");
+  const [uploadOpen, setUploadOpen] = useState(false);
 
   // SaaS Workspace & Auth State
   const [currentUser, setCurrentUser] = useState(null);
   const [activeView, setActiveView] = useState("home"); // home | workspace | documents | tasks | deadlines | rules
   const [dashboardStats, setDashboardStats] = useState(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [dashboardStatsError, setDashboardStatsError] = useState("");
 
   // Modals state
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -39,6 +71,7 @@ function App() {
   const [explainItem, setExplainItem] = useState(null);
   const [explainType, setExplainType] = useState("Task");
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [focusedReminder, setFocusedReminder] = useState(null);
 
   // Theme
   const [theme, setTheme] = useState(
@@ -51,11 +84,12 @@ function App() {
   const userMenuRef = useRef(null);
   const loadDashboardStats = async () => {
     setStatsLoading(true);
+    setDashboardStatsError("");
     try {
       const stats = await api.getDashboardStats();
       setDashboardStats(stats);
-    } catch {
-      // Handled silently
+    } catch (requestError) {
+      setDashboardStatsError(requestError.message || "Unable to load workspace statistics.");
     } finally {
       setStatsLoading(false);
     }
@@ -113,12 +147,29 @@ function App() {
   }, [analysis]);
 
   const scrollToUpload = () => {
-    if (activeView !== "home" && activeView !== "workspace") {
+    if (loading) return;
+    setUploadOpen(true);
+    setFile(null);
+    setError("");
+    if (currentUser && activeView !== "workspace") {
       setActiveView("workspace");
+    } else if (!currentUser && activeView !== "home") {
+      setActiveView("home");
     }
     setTimeout(() => {
       uploadRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     }, 50);
+  };
+
+  const navigateTo = (view) => {
+    if (loading) return;
+    if (view !== "workspace") setUploadOpen(false);
+    if (view !== "workspace") {
+      setFile(null);
+      setError("");
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+    setActiveView(view);
   };
 
   const selectFile = (candidate) => {
@@ -138,9 +189,6 @@ function App() {
 
     setFile(candidate);
     setError("");
-    setAnalysis(null);
-    setDocumentInfo(null);
-    setCompletedTasks(new Set());
   };
 
   const uploadDocument = async () => {
@@ -151,9 +199,6 @@ function App() {
 
     setLoading(true);
     setError("");
-    setAnalysis(null);
-    setDocumentInfo(null);
-    setCompletedTasks(new Set());
 
     try {
       const data = await api.uploadDocument(file);
@@ -169,6 +214,10 @@ function App() {
         is_saved: data.is_saved,
       });
       setAnalysis(data.analysis);
+      setCompletedTasks(new Set());
+      setFile(null);
+      setUploadOpen(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
 
       if (currentUser) {
         loadDashboardStats();
@@ -195,6 +244,7 @@ function App() {
         is_saved: true,
       });
       setAnalysis(doc.analysis);
+      setUploadOpen(false);
 
       // Populate completed tasks
       const completedSet = new Set();
@@ -203,7 +253,7 @@ function App() {
       });
       setCompletedTasks(completedSet);
 
-      setActiveView("home"); // Show in home/analysis view
+      setActiveView(currentUser ? "workspace" : "home");
     } catch (err) {
       alert(err.message || "Could not open document.");
     } finally {
@@ -218,13 +268,9 @@ function App() {
   };
 
   const resetDocument = () => {
-    setAnalysis(null);
-    setDocumentInfo(null);
+    if (loading) return;
     setFile(null);
     setError("");
-    setCompletedTasks(new Set());
-    setFilter("ALL");
-    setSortBy("priority");
     scrollToUpload();
   };
 
@@ -252,6 +298,15 @@ function App() {
     setExplainModalOpen(true);
   };
 
+  const handleOpenReminderTarget = useCallback((item) => {
+    setFocusedReminder({
+      type: item.target_type,
+      id: item.target_id,
+    });
+    setUploadOpen(false);
+    setActiveView(item.target_type === "task" ? "tasks" : "deadlines");
+  }, []);
+
   const handleAuthSuccess = (user) => {
     setCurrentUser(user);
     setActiveView("workspace");
@@ -263,6 +318,7 @@ function App() {
     setCurrentUser(null);
     setActiveView("home");
     setDashboardStats(null);
+    setDashboardStatsError("");
     setUserMenuOpen(false);
   };
 
@@ -290,14 +346,11 @@ function App() {
           aria-label="DocuGuard AI home"
         >
           <span className="brand-mark" aria-hidden="true">
-            <svg viewBox="0 0 32 32">
-              <path d="M16 3 27 7v8c0 7-4.5 11.7-11 14C9.5 26.7 5 22 5 15V7l11-4Z" />
-              <path d="m11.5 15.8 3 3 6.5-7" />
-            </svg>
+            <Shield size={18} className="brand-shield-icon" />
           </span>
           <span className="brand-copy">
             <strong>DocuGuard AI</strong>
-            <small>From documents to action.</small>
+            <small>Autonomous Document Intelligence</small>
           </span>
         </a>
 
@@ -307,38 +360,43 @@ function App() {
             <>
               <button
                 className={`nav-tab-btn ${activeView === "workspace" ? "active" : ""}`}
-                onClick={() => setActiveView("workspace")}
+                onClick={() => navigateTo("workspace")}
                 type="button"
               >
-                Workspace
+                <LayoutDashboard size={14} />
+                <span>Workspace</span>
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "documents" ? "active" : ""}`}
-                onClick={() => setActiveView("documents")}
+                onClick={() => navigateTo("documents")}
                 type="button"
               >
-                Documents
+                <FileText size={14} />
+                <span>Documents</span>
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "tasks" ? "active" : ""}`}
-                onClick={() => setActiveView("tasks")}
+                onClick={() => navigateTo("tasks")}
                 type="button"
               >
-                Tasks
+                <CheckSquare size={14} />
+                <span>Tasks</span>
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "deadlines" ? "active" : ""}`}
-                onClick={() => setActiveView("deadlines")}
+                onClick={() => navigateTo("deadlines")}
                 type="button"
               >
-                Deadlines
+                <Clock size={14} />
+                <span>Deadlines</span>
               </button>
               <button
                 className={`nav-tab-btn ${activeView === "rules" ? "active" : ""}`}
-                onClick={() => setActiveView("rules")}
+                onClick={() => navigateTo("rules")}
                 type="button"
               >
-                Rules
+                <Shield size={14} />
+                <span>Rules</span>
               </button>
             </>
           ) : (
@@ -351,15 +409,31 @@ function App() {
                 Home
               </a>
               <a href="#how-it-works">How It Works</a>
-              <a href="#features">Features</a>
+              <a href="#features">Capabilities</a>
               <a href="#about">About</a>
             </>
           )}
         </nav>
 
         <div className="header-actions">
-          <button className="theme-toggle" onClick={toggleTheme} type="button">
-            {theme === "arctic" ? "◐ Cyber" : "☀ Arctic"}
+          {currentUser && (
+            <NotificationsCenter
+              onOpenTarget={handleOpenReminderTarget}
+              onOpenDocument={handleOpenSavedDocument}
+            />
+          )}
+          <button className="theme-toggle" onClick={toggleTheme} type="button" aria-label="Toggle visual theme">
+            {theme === "arctic" ? (
+              <>
+                <Moon size={14} className="theme-toggle-icon" />
+                <span>Cyber</span>
+              </>
+            ) : (
+              <>
+                <Sun size={14} className="theme-toggle-icon" />
+                <span>Arctic</span>
+              </>
+            )}
           </button>
 
           {currentUser ? (
@@ -375,7 +449,7 @@ function App() {
                     : "U"}
                 </span>
                 <strong>{currentUser.full_name.split(" ")[0]}</strong>
-                <span style={{ fontSize: "9px" }}>▾</span>
+                <ChevronDown size={13} className="user-chevron" />
               </button>
 
               {userMenuOpen && (
@@ -383,11 +457,22 @@ function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      setActiveView("workspace");
+                      navigateTo("workspace");
                       setUserMenuOpen(false);
                     }}
                   >
-                    📊 Workspace Dashboard
+                    <LayoutDashboard size={15} />
+                    <span>Workspace Dashboard</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigateTo("settings");
+                      setUserMenuOpen(false);
+                    }}
+                  >
+                    <Bell size={15} />
+                    <span>Reminder Settings</span>
                   </button>
                   <button
                     type="button"
@@ -396,11 +481,13 @@ function App() {
                       setUserMenuOpen(false);
                     }}
                   >
-                    👤 My Profile
+                    <User size={15} />
+                    <span>My Profile</span>
                   </button>
                   <hr />
                   <button className="logout-item" onClick={handleLogout} type="button">
-                    🚪 Sign Out
+                    <LogOut size={15} />
+                    <span>Sign Out</span>
                   </button>
                 </div>
               )}
@@ -414,17 +501,29 @@ function App() {
               }}
               type="button"
             >
-              Login / Sign Up
+              Sign In
             </button>
           )}
 
           {analysis ? (
-            <button className="header-cta" onClick={resetDocument} type="button">
-              + New Document
+            <button
+              className="header-cta"
+              disabled={loading}
+              onClick={resetDocument}
+              type="button"
+            >
+              <FilePlus size={15} />
+              <span>New Document</span>
             </button>
           ) : (
-            <button className="header-cta" onClick={scrollToUpload} type="button">
-              Upload PDF
+            <button
+              className="header-cta"
+              disabled={loading}
+              onClick={scrollToUpload}
+              type="button"
+            >
+              <UploadCloud size={15} />
+              <span>Upload PDF</span>
             </button>
           )}
         </div>
@@ -437,9 +536,11 @@ function App() {
             user={currentUser}
             stats={dashboardStats}
             loading={statsLoading}
+            error={dashboardStatsError}
+            onRetry={loadDashboardStats}
             onQuickUploadClick={scrollToUpload}
             onOpenDocument={handleOpenSavedDocument}
-            onNavigate={(v) => setActiveView(v)}
+            onNavigate={navigateTo}
             onExplainItem={handleExplain}
           />
         )}
@@ -457,6 +558,7 @@ function App() {
           <TasksView
             onOpenDocument={handleOpenSavedDocument}
             onExplainItem={handleExplain}
+            focusTaskId={focusedReminder?.type === "task" ? focusedReminder.id : null}
           />
         )}
 
@@ -465,8 +567,13 @@ function App() {
           <DeadlinesView
             onOpenDocument={handleOpenSavedDocument}
             onExplainItem={handleExplain}
+            focusDeadlineId={
+              focusedReminder?.type === "deadline" ? focusedReminder.id : null
+            }
           />
         )}
+
+        {currentUser && activeView === "settings" && <ReminderSettingsView />}
 
         {/* VIEW 5: GLOBAL RULES */}
         {currentUser && activeView === "rules" && (
@@ -483,47 +590,54 @@ function App() {
               <section className="hero-section page-width" id="home">
                 <div className="hero-copy">
                   <span className="eyebrow hero-eyebrow">
-                    <span className="eyebrow-spark">✦</span>
-                    Turning documents into real actions
+                    <Sparkles size={13} className="eyebrow-spark" />
+                    <span>Autonomous Document Intelligence 2.0</span>
                   </span>
-                  <span className="section-kicker">DOCUMENT INTELLIGENCE</span>
+                  <span className="section-kicker">DOCUMENT INTELLIGENCE PLATFORM</span>
                   <h1>
-                    From notices to
+                    From complex notices to
                     <span> actionable tasks.</span>
                   </h1>
                   <p className="hero-description">
-                    Upload a notice, circular, guideline or institutional PDF.
-                    DocuGuard AI finds the important actions, deadlines and
-                    priorities for you.
+                    Upload any institutional notice, university circular, or policy guideline.
+                    DocuGuard AI extracts the critical actions, time-sensitive deadlines, and mandatory compliance rules in seconds.
                   </p>
 
                   <div className="hero-highlights" aria-label="Key capabilities">
                     <div className="hero-highlight">
-                      <span className="highlight-icon blue-icon">▤</span>
+                      <span className="highlight-icon blue-icon">
+                        <FileSearch size={16} />
+                      </span>
                       <span>
                         <strong>Smart Extraction</strong>
                         <small>Finds important actions</small>
                       </span>
                     </div>
                     <div className="hero-highlight">
-                      <span className="highlight-icon pink-icon">◉</span>
+                      <span className="highlight-icon pink-icon">
+                        <AlertTriangle size={16} />
+                      </span>
                       <span>
-                        <strong>Priority Detection</strong>
-                        <small>Shows what matters first</small>
+                        <strong>Priority Radar</strong>
+                        <small>Surfaces what matters first</small>
                       </span>
                     </div>
                     <div className="hero-highlight">
-                      <span className="highlight-icon amber-icon">◷</span>
+                      <span className="highlight-icon amber-icon">
+                        <Clock size={16} />
+                      </span>
                       <span>
-                        <strong>Deadline Recognition</strong>
-                        <small>Surfaces important dates</small>
+                        <strong>Deadline Radar</strong>
+                        <small>Catches all due dates</small>
                       </span>
                     </div>
                     <div className="hero-highlight">
-                      <span className="highlight-icon green-icon">✓</span>
+                      <span className="highlight-icon green-icon">
+                        <CheckSquare size={16} />
+                      </span>
                       <span>
-                        <strong>Action Lists</strong>
-                        <small>Turn text into tasks</small>
+                        <strong>Task Execution</strong>
+                        <small>Turns raw text into tasks</small>
                       </span>
                     </div>
                   </div>
@@ -534,7 +648,9 @@ function App() {
                       onClick={scrollToUpload}
                       type="button"
                     >
-                      ↑ Upload Document <span aria-hidden="true">→</span>
+                      <UploadCloud size={16} />
+                      <span>Upload Document</span>
+                      <ArrowRight size={15} aria-hidden="true" />
                     </button>
                     <button
                       className="secondary-button"
@@ -544,16 +660,26 @@ function App() {
                       }}
                       type="button"
                     >
-                      ✦ Create Free Account
+                      <Sparkles size={15} />
+                      <span>Create Free Account</span>
                     </button>
                   </div>
                 </div>
 
                 <div className="hero-art" aria-hidden="true">
-                  <span className="art-label important-label">Important actions</span>
-                  <span className="art-label deadline-label">Deadlines</span>
+                  <span className="art-label important-label">
+                    <AlertTriangle size={13} />
+                    <span>High Priority</span>
+                  </span>
+                  <span className="art-label deadline-label">
+                    <Clock size={13} />
+                    <span>Strict Deadline</span>
+                  </span>
                   <div className="document-illustration">
-                    <div className="document-heading">Notice / Circular</div>
+                    <div className="document-heading">
+                      <FileText size={16} />
+                      <span>Official University Circular</span>
+                    </div>
                     <span className="document-line line-wide" />
                     <span className="document-line" />
                     <span className="document-highlight yellow-line" />
@@ -562,149 +688,167 @@ function App() {
                     <span className="document-line line-wide" />
                     <span className="document-line line-short" />
                   </div>
-                  <div className="action-note">
-                    <span>✓ Submit application</span>
-                    <span>✓ Attend meeting</span>
-                    <span>✓ Check deadline</span>
-                    <b>Priorities</b>
-                  </div>
                 </div>
               </section>
             )}
 
             {/* Document Workspace Upload & Drop Zone */}
-            <section
-              className="workspace-section page-width"
-              id="workspace"
-              ref={uploadRef}
-            >
-              <div className="workspace-card">
-                <div className="workspace-heading">
-                  <span className="workspace-icon" aria-hidden="true">
-                    ▤
-                  </span>
-                  <div>
-                    <span className="section-kicker">DOCUMENT WORKSPACE</span>
-                    <h2>Upload &amp; Analyze Document</h2>
-                    <p>
-                      Supports PDF notices, circulars, guidelines and institutional documents.
-                      {currentUser
-                        ? " Your analysis will be saved to your personal history."
-                        : " Sign in to persist your documents and deadlines."}
-                    </p>
-                  </div>
-                </div>
-
-                <label
-                  className={`drop-zone ${isDragging ? "dragging" : ""}`}
-                  onDragEnter={(event) => {
-                    event.preventDefault();
-                    setIsDragging(true);
-                  }}
-                  onDragOver={(event) => event.preventDefault()}
-                  onDragLeave={(event) => {
-                    if (!event.currentTarget.contains(event.relatedTarget)) {
-                      setIsDragging(false);
-                    }
-                  }}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    setIsDragging(false);
-                    selectFile(event.dataTransfer.files[0]);
-                  }}
-                >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    accept="application/pdf,.pdf"
-                    onChange={(event) => {
-                      selectFile(event.target.files[0]);
-                      event.target.value = "";
-                    }}
-                  />
-                  <span className="upload-symbol" aria-hidden="true">
-                    ↑
-                  </span>
-                  <strong>{file ? file.name : "Drag & drop your PDF here"}</strong>
-                  <span>{file ? "Ready for analysis" : "or click to browse files"}</span>
-                  <small>PDF only · Up to 15 MB</small>
-                </label>
-
-                {file && (
-                  <div className="selected-file">
-                    <span className="pdf-badge" aria-hidden="true">
-                      PDF
+            {uploadOpen && (
+              <section
+                className="workspace-section page-width"
+                id="workspace"
+                ref={uploadRef}
+              >
+                <div className="workspace-card">
+                  <div className="workspace-heading">
+                    <span className="workspace-icon" aria-hidden="true">
+                      <UploadCloud size={24} />
                     </span>
-                    <div className="selected-file-copy">
-                      <strong>{file.name}</strong>
-                      <small>
-                        {(file.size / (1024 * 1024)).toFixed(2)} MB · Ready for analysis
-                      </small>
+                    <div>
+                      <span className="section-kicker">DOCUMENT WORKSPACE</span>
+                      <h2>Upload &amp; Analyze Document</h2>
+                      <p>
+                        Supports PDF notices, circulars, guidelines and institutional documents.
+                        {currentUser
+                          ? " Your analysis will be saved to your personal history."
+                          : " Sign in to persist your documents and deadlines."}
+                      </p>
                     </div>
                     <button
-                      aria-label="Remove selected file"
+                      className="text-button upload-close-button"
+                      disabled={loading}
                       onClick={() => {
+                        setUploadOpen(false);
                         setFile(null);
                         setError("");
                       }}
                       type="button"
                     >
-                      ×
+                      <X size={15} />
+                      <span>Close</span>
                     </button>
                   </div>
-                )}
 
-                <button
-                  className="analyze-button"
-                  onClick={uploadDocument}
-                  disabled={loading}
-                  type="button"
-                >
-                  {loading ? (
-                    <>
-                      <span className="spinner" /> Analyzing document…
-                    </>
-                  ) : (
-                    "✦  Analyze Document"
+                  <label
+                    className={`drop-zone ${isDragging ? "dragging" : ""}`}
+                    onDragEnter={(event) => {
+                      event.preventDefault();
+                      setIsDragging(true);
+                    }}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDragLeave={(event) => {
+                      if (!event.currentTarget.contains(event.relatedTarget)) {
+                        setIsDragging(false);
+                      }
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      setIsDragging(false);
+                      if (loading) return;
+                      selectFile(event.dataTransfer.files[0]);
+                    }}
+                  >
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      disabled={loading}
+                      onChange={(event) => {
+                        if (!loading) selectFile(event.target.files[0]);
+                        event.target.value = "";
+                      }}
+                    />
+                    <span className="upload-symbol" aria-hidden="true">
+                      <UploadCloud size={38} />
+                    </span>
+                    <strong>{file ? file.name : "Drag & drop your PDF notice here"}</strong>
+                    <span>{file ? "File selected and ready" : "or click anywhere to browse from your device"}</span>
+                    <small>Official PDF documents · Up to 15 MB · Private &amp; Encrypted</small>
+                  </label>
+
+                  {file && (
+                    <div className="selected-file">
+                      <span className="pdf-badge" aria-hidden="true">
+                        PDF
+                      </span>
+                      <div className="selected-file-copy">
+                        <strong>{file.name}</strong>
+                        <small>
+                          {(file.size / (1024 * 1024)).toFixed(2)} MB · Ready for AI analysis
+                        </small>
+                      </div>
+                      <button
+                        aria-label="Remove selected file"
+                        disabled={loading}
+                        onClick={() => {
+                          setFile(null);
+                          setError("");
+                        }}
+                        type="button"
+                      >
+                        <X size={15} />
+                      </button>
+                    </div>
                   )}
-                </button>
 
-                {error && (
-                  <p className="upload-error" role="alert">
-                    ⚠ {error}
-                  </p>
-                )}
+                  <button
+                    className="analyze-button"
+                    onClick={uploadDocument}
+                    disabled={loading}
+                    type="button"
+                  >
+                    {loading ? (
+                      <>
+                        <span className="spinner" />
+                        <span>Extracting &amp; analyzing document…</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={16} />
+                        <span>Run AI Analysis</span>
+                      </>
+                    )}
+                  </button>
 
-                <div className="trust-row">
-                  <div>
-                    <span>▣</span>
-                    <p>
-                      <strong>Secure Upload</strong>
-                      <small>Private to your account</small>
-                    </p>
-                  </div>
-                  <div>
-                    <span>✦</span>
-                    <p>
-                      <strong>Explainable AI</strong>
-                      <small>Clear audit trail</small>
-                    </p>
-                  </div>
-                  <div>
-                    <span>✓</span>
-                    <p>
-                      <strong>Clear Results</strong>
-                      <small>Tasks, deadlines &amp; rules</small>
-                    </p>
+                  {error && (
+                    <div className="upload-error" role="alert">
+                      <AlertTriangle size={16} />
+                      <span>{error}</span>
+                    </div>
+                  )}
+
+                  <div className="trust-row">
+                    <div>
+                      <span><ShieldCheck size={16} /></span>
+                      <p>
+                        <strong>Secure Upload</strong>
+                        <small>Private to your account</small>
+                      </p>
+                    </div>
+                    <div>
+                      <span><Sparkles size={16} /></span>
+                      <p>
+                        <strong>Explainable AI</strong>
+                        <small>Clear audit trail</small>
+                      </p>
+                    </div>
+                    <div>
+                      <span><CheckCircle2 size={16} /></span>
+                      <p>
+                        <strong>Clear Results</strong>
+                        <small>Tasks, deadlines &amp; rules</small>
+                      </p>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </section>
+              </section>
+            )}
           </>
         )}
 
         {/* ANALYSIS RESULTS SECTION */}
-        {analysis && (
+        {analysis &&
+          (activeView === "home" || activeView === "workspace") && (
           <section
             className="results-section page-width"
             id="results"
@@ -724,42 +868,57 @@ function App() {
                     : " · Ephemeral (Sign in to save)"}
                 </p>
               </div>
-              <button className="text-button" onClick={resetDocument} type="button">
+              <button
+                className="text-button"
+                disabled={loading}
+                onClick={resetDocument}
+                type="button"
+              >
                 Analyze another PDF <span aria-hidden="true">→</span>
               </button>
             </div>
 
             <div className="metrics">
               <article className="metric-card blue">
-                <span className="metric-icon">▤</span>
+                <span className="metric-icon">
+                  <FileText size={20} />
+                </span>
                 <span>
                   <small>Document Type</small>
                   <strong>{analysis.document_type.replaceAll("_", " ")}</strong>
                 </span>
               </article>
               <article className="metric-card purple">
-                <span className="metric-icon">✓</span>
+                <span className="metric-icon">
+                  <CheckSquare size={20} />
+                </span>
                 <span>
                   <small>Tasks Found</small>
                   <strong>{tasks.length}</strong>
                 </span>
               </article>
               <article className="metric-card red">
-                <span className="metric-icon">!</span>
+                <span className="metric-icon">
+                  <AlertTriangle size={20} />
+                </span>
                 <span>
                   <small>High Priority</small>
                   <strong>{highCount}</strong>
                 </span>
               </article>
               <article className="metric-card orange">
-                <span className="metric-icon">◷</span>
+                <span className="metric-icon">
+                  <Clock size={20} />
+                </span>
                 <span>
                   <small>Deadlines</small>
                   <strong>{deadlines.length || deadlineCount}</strong>
                 </span>
               </article>
               <article className="metric-card green">
-                <span className="metric-icon">◈</span>
+                <span className="metric-icon">
+                  <Shield size={20} />
+                </span>
                 <span>
                   <small>Rules Detected</small>
                   <strong>{rules.length}</strong>
@@ -797,21 +956,24 @@ function App() {
                 onClick={() => setAnalysisActiveTab("tasks")}
                 type="button"
               >
-                Actionable Tasks ({tasks.length})
+                <CheckSquare size={15} />
+                <span>Actionable Tasks ({tasks.length})</span>
               </button>
               <button
                 className={`analysis-tab-btn ${analysisActiveTab === "rules" ? "active" : ""}`}
                 onClick={() => setAnalysisActiveTab("rules")}
                 type="button"
               >
-                Important Rules ({rules.length})
+                <Shield size={15} />
+                <span>Important Rules ({rules.length})</span>
               </button>
               <button
                 className={`analysis-tab-btn ${analysisActiveTab === "deadlines" ? "active" : ""}`}
                 onClick={() => setAnalysisActiveTab("deadlines")}
                 type="button"
               >
-                Key Deadlines ({deadlines.length})
+                <Clock size={15} />
+                <span>Key Deadlines ({deadlines.length})</span>
               </button>
             </div>
 
@@ -871,15 +1033,19 @@ function App() {
                               {priority}
                             </span>
                             <div className="task-top-right">
-                              <span className="confidence">
-                                {Math.round((task.confidence ?? 0) * 100)}% confidence
+                              <span
+                                className="confidence"
+                                title="Heuristic review score, not a calibrated probability"
+                              >
+                                {Math.round((task.confidence ?? 0) * 100)}% heuristic
                               </span>
                               <button
                                 className="why-link"
                                 onClick={() => handleExplain(task, "Actionable Task")}
                                 type="button"
                               >
-                                Why detected?
+                                <Sparkles size={12} />
+                                <span>Why detected?</span>
                               </button>
                             </div>
                           </div>
@@ -887,7 +1053,11 @@ function App() {
                           <div className="task-info">
                             <div>
                               <span>Deadline</span>
-                              <strong>{task.deadline || "Not specified"}</strong>
+                              <strong>
+                                {task.deadline
+                                  ? `${task.deadline}${task.deadline_time ? ` at ${task.deadline_time}` : ""}`
+                                  : "Not specified"}
+                              </strong>
                             </div>
                             <div>
                               <span>Category</span>
@@ -899,7 +1069,14 @@ function App() {
                             onClick={() => toggleTask(task.originalIndex, task.id)}
                             type="button"
                           >
-                            {isCompleted ? "✓ Completed" : "Mark as complete"}
+                            {isCompleted ? (
+                              <>
+                                <Check size={14} />
+                                <span>Completed</span>
+                              </>
+                            ) : (
+                              <span>Mark as complete</span>
+                            )}
                           </button>
                         </article>
                       );
@@ -935,7 +1112,10 @@ function App() {
                         >
                           <div className="rule-top">
                             <span className={`rule-type-badge ${ruleTypeClass}`}>
-                              {rule.rule_type}
+                              {rule.rule_type === "MANDATORY" && <AlertTriangle size={12} />}
+                              {rule.rule_type === "PROHIBITED" && <AlertTriangle size={12} />}
+                              {rule.rule_type === "RECOMMENDED" && <ShieldCheck size={12} />}
+                              <span>{rule.rule_type}</span>
                             </span>
                             <div className="rule-top-right">
                               <span className="confidence">
@@ -946,7 +1126,8 @@ function App() {
                                 onClick={() => handleExplain(rule, "Compliance Rule")}
                                 type="button"
                               >
-                                Why detected?
+                                <Sparkles size={12} />
+                                <span>Why detected?</span>
                               </button>
                             </div>
                           </div>
@@ -986,6 +1167,7 @@ function App() {
                       <article className="deadline-card" key={dl.id || idx}>
                         <div className="deadline-card-header">
                           <div className="deadline-date-pill large">
+                            <Calendar size={15} />
                             <strong>{dl.deadline_date}</strong>
                             <small>OFFICIAL DEADLINE</small>
                           </div>
@@ -994,7 +1176,8 @@ function App() {
                             onClick={() => handleExplain(dl, "Deadline")}
                             type="button"
                           >
-                            Why detected?
+                            <Sparkles size={12} />
+                            <span>Why detected?</span>
                           </button>
                         </div>
                         <h3>{dl.description}</h3>
@@ -1019,36 +1202,44 @@ function App() {
               <h2>Works with the documents you already receive.</h2>
               <div className="document-type-grid">
                 <a href="#workspace" onClick={scrollToUpload}>
-                  <span className="type-icon lavender">▤</span>
+                  <span className="type-icon lavender">
+                    <FileText size={20} />
+                  </span>
                   <span>
                     <strong>Notices</strong>
                     <small>College and institutional notices</small>
                   </span>
-                  <b>→</b>
+                  <ArrowRight size={16} />
                 </a>
                 <a href="#workspace" onClick={scrollToUpload}>
-                  <span className="type-icon rose">◈</span>
+                  <span className="type-icon rose">
+                    <Layers size={20} />
+                  </span>
                   <span>
                     <strong>Circulars</strong>
-                    <small>Official announcements</small>
+                    <small>Official announcements &amp; updates</small>
                   </span>
-                  <b>→</b>
+                  <ArrowRight size={16} />
                 </a>
                 <a href="#workspace" onClick={scrollToUpload}>
-                  <span className="type-icon amber">▣</span>
+                  <span className="type-icon amber">
+                    <Scale size={20} />
+                  </span>
                   <span>
                     <strong>Guidelines</strong>
                     <small>Policies and academic guidelines</small>
                   </span>
-                  <b>→</b>
+                  <ArrowRight size={16} />
                 </a>
                 <a href="#workspace" onClick={scrollToUpload}>
-                  <span className="type-icon mint">⌂</span>
+                  <span className="type-icon mint">
+                    <Building2 size={20} />
+                  </span>
                   <span>
                     <strong>Institutional PDFs</strong>
                     <small>Official documents and instructions</small>
                   </span>
-                  <b>→</b>
+                  <ArrowRight size={16} />
                 </a>
               </div>
             </section>
@@ -1065,19 +1256,25 @@ function App() {
               <div className="steps-grid">
                 <article className="step-card">
                   <span className="step-number">01</span>
-                  <span className="step-icon">↑</span>
+                  <span className="step-icon">
+                    <UploadCloud size={22} />
+                  </span>
                   <h3>Upload</h3>
                   <p>Select the PDF you want DocuGuard to understand.</p>
                 </article>
                 <article className="step-card">
                   <span className="step-number">02</span>
-                  <span className="step-icon">✦</span>
+                  <span className="step-icon">
+                    <Cpu size={22} />
+                  </span>
                   <h3>Analyze</h3>
                   <p>AI extracts relevant actions, priorities and available deadlines.</p>
                 </article>
                 <article className="step-card">
                   <span className="step-number">03</span>
-                  <span className="step-icon">✓</span>
+                  <span className="step-icon">
+                    <CheckSquare size={22} />
+                  </span>
                   <h3>Take Action</h3>
                   <p>Review your task list and mark completed actions.</p>
                 </article>

@@ -1,3 +1,5 @@
+import { X, LogOut } from "lucide-react";
+
 export default function ProfileModal({ isOpen, onClose, user, onLogout }) {
   if (!isOpen || !user) return null;
 
@@ -27,7 +29,7 @@ export default function ProfileModal({ isOpen, onClose, user, onLogout }) {
             <h2>Account Details</h2>
           </div>
           <button className="modal-close" onClick={onClose} type="button" aria-label="Close modal">
-            ✕
+            <X size={18} />
           </button>
         </div>
 
@@ -61,7 +63,8 @@ export default function ProfileModal({ isOpen, onClose, user, onLogout }) {
               }}
               type="button"
             >
-              Sign Out of DocuGuard
+              <LogOut size={16} />
+              <span>Sign Out of DocuGuard</span>
             </button>
           </div>
         </div>

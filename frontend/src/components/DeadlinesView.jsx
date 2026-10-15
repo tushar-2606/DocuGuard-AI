@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
+import { Clock, Calendar, AlertTriangle, ExternalLink, Sparkles, Check } from "lucide-react";
 import { api } from "../services/api";
 
-export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
+export default function DeadlinesView({
+  onOpenDocument,
+  onExplainItem,
+  focusDeadlineId,
+}) {
   const [deadlines, setDeadlines] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -27,6 +32,16 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
       isCurrent = false;
     };
   }, [statusFilter]);
+
+  useEffect(() => {
+    if (loading || !focusDeadlineId) return undefined;
+    const timer = window.setTimeout(() => {
+      document
+        .getElementById(`deadline-card-${focusDeadlineId}`)
+        ?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [deadlines, focusDeadlineId, loading]);
 
   const handleToggle = async (dlId) => {
     try {
@@ -75,11 +90,14 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
         </div>
       ) : error ? (
         <div className="upload-error" role="alert">
-          ⚠ {error}
+          <AlertTriangle size={16} />
+          <span>{error}</span>
         </div>
       ) : deadlines.length === 0 ? (
         <div className="empty-state-card">
-          <span className="empty-icon">◷</span>
+          <span className="empty-icon">
+            <Clock size={32} />
+          </span>
           <h3>No deadlines found</h3>
           <p>No time-sensitive deadlines match your current filter.</p>
         </div>
@@ -88,12 +106,18 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
           {deadlines.map((dl) => (
             <article
               className={`deadline-card ${dl.is_completed ? "completed" : dl.is_overdue ? "overdue" : ""}`}
+              id={`deadline-card-${dl.id}`}
               key={dl.id}
             >
               <div className="deadline-card-header">
                 <div className="deadline-date-pill large">
-                  <strong>{dl.deadline_date}</strong>
-                  <span className={dl.is_overdue ? "badge-overdue" : "badge-upcoming"}>
+                  <div className="deadline-date-text">
+                    <Calendar size={15} className="calendar-icon" />
+                    <strong>
+                      {dl.deadline_date}{dl.deadline_time ? ` at ${dl.deadline_time}` : ""}
+                    </strong>
+                  </div>
+                  <span className={dl.is_completed ? "badge-completed" : dl.is_overdue ? "badge-overdue" : "badge-upcoming"}>
                     {dl.is_completed ? "COMPLETED" : dl.is_overdue ? "OVERDUE" : "UPCOMING"}
                   </span>
                 </div>
@@ -102,21 +126,23 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
                   onClick={() => onExplainItem(dl, "Deadline")}
                   type="button"
                 >
-                  Why detected?
+                  <Sparkles size={12} />
+                  <span>Why detected?</span>
                 </button>
               </div>
 
               <h3>{dl.description}</h3>
 
               <div className="deadline-card-footer">
-                <div>
-                  <span>Source Document: </span>
+                <div className="source-doc-link-wrap">
+                  <span>Source: </span>
                   <button
                     className="doc-link-button"
                     onClick={() => onOpenDocument(dl.document_id)}
                     type="button"
                   >
-                    {dl.document_name}
+                    <span>{dl.document_name}</span>
+                    <ExternalLink size={12} />
                   </button>
                 </div>
                 <button
@@ -124,7 +150,14 @@ export default function DeadlinesView({ onOpenDocument, onExplainItem }) {
                   onClick={() => handleToggle(dl.id)}
                   type="button"
                 >
-                  {dl.is_completed ? "✓ Met" : "Mark as Met"}
+                  {dl.is_completed ? (
+                    <>
+                      <Check size={14} />
+                      <span>Met</span>
+                    </>
+                  ) : (
+                    <span>Mark as Met</span>
+                  )}
                 </button>
               </div>
             </article>

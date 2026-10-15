@@ -1,3 +1,5 @@
+import { X, Sparkles, FileText } from "lucide-react";
+
 export default function ExplainModal({ isOpen, onClose, item, type = "Task" }) {
   if (!isOpen || !item) return null;
 
@@ -13,12 +15,12 @@ export default function ExplainModal({ isOpen, onClose, item, type = "Task" }) {
       <div className="modal-card explain-modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div className="modal-header-copy">
-            <span className="section-kicker">EXPLAINABILITY &amp; AUDIT</span>
+            <span className="section-kicker">EXPLAINABILITY &amp; AUDIT TRAIL</span>
             <h2>Why Was This Detected?</h2>
             <p>Inspection details and deterministic signal breakdown.</p>
           </div>
           <button className="modal-close" onClick={onClose} type="button" aria-label="Close modal">
-            ✕
+            <X size={18} />
           </button>
         </div>
 
@@ -47,7 +49,7 @@ export default function ExplainModal({ isOpen, onClose, item, type = "Task" }) {
           <div className="explain-metric-strip">
             <div className="explain-metric-item">
               <span>Detection Confidence</span>
-              <strong>{confidencePercent}%</strong>
+              <strong className="confidence-score-val">{confidencePercent}%</strong>
             </div>
             <div className="explain-metric-item">
               <span>Classifier Engine</span>
@@ -61,7 +63,9 @@ export default function ExplainModal({ isOpen, onClose, item, type = "Task" }) {
 
           <div className="explain-box">
             <div className="explain-box-heading">
-              <span className="explain-icon">✦</span>
+              <span className="explain-icon">
+                <Sparkles size={16} />
+              </span>
               <strong>Detection Rationale</strong>
             </div>
             <p>{reason}</p>
@@ -69,7 +73,9 @@ export default function ExplainModal({ isOpen, onClose, item, type = "Task" }) {
 
           <div className="source-box">
             <div className="source-box-heading">
-              <span className="source-icon">▤</span>
+              <span className="source-icon">
+                <FileText size={16} />
+              </span>
               <strong>Source Statement from Document</strong>
             </div>
             <blockquote>"{sourceSnippet}"</blockquote>

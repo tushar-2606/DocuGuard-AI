@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { X, AlertTriangle, Lock, Mail, User, ArrowRight } from "lucide-react";
 import { api, setStoredToken } from "../services/api";
 
 export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode = "login" }) {
@@ -26,8 +27,8 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode 
         setError("Please enter your full name.");
         return;
       }
-      if (password.length < 6) {
-        setError("Password must be at least 6 characters long.");
+      if (password.length < 8) {
+        setError("Password must be at least 8 characters long.");
         return;
       }
       if (password !== confirmPassword) {
@@ -74,7 +75,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode 
             </p>
           </div>
           <button className="modal-close" onClick={onClose} type="button" aria-label="Close modal">
-            ✕
+            <X size={18} />
           </button>
         </div>
 
@@ -98,7 +99,7 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode 
         <form className="auth-form" onSubmit={handleSubmit}>
           {error && (
             <div className="auth-error-banner" role="alert">
-              <span>⚠</span>
+              <AlertTriangle size={15} />
               <p>{error}</p>
             </div>
           )}
@@ -106,54 +107,66 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode 
           {mode === "signup" && (
             <div className="form-group">
               <label htmlFor="auth-name">Full Name</label>
-              <input
-                id="auth-name"
-                type="text"
-                placeholder="e.g. Tushar Patel"
-                value={fullName}
-                onChange={(e) => setFullName(e.target.value)}
-                required
-                autoFocus
-              />
+              <div className="input-with-icon">
+                <User size={16} className="input-field-icon" />
+                <input
+                  id="auth-name"
+                  type="text"
+                  placeholder="e.g. Alex Morgan"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  required
+                  autoFocus
+                />
+              </div>
             </div>
           )}
 
           <div className="form-group">
             <label htmlFor="auth-email">Work or Institutional Email</label>
-            <input
-              id="auth-email"
-              type="email"
-              placeholder="name@organization.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              autoFocus={mode === "login"}
-            />
+            <div className="input-with-icon">
+              <Mail size={16} className="input-field-icon" />
+              <input
+                id="auth-email"
+                type="email"
+                placeholder="name@organization.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                autoFocus={mode === "login"}
+              />
+            </div>
           </div>
 
           <div className="form-group">
             <label htmlFor="auth-password">Password</label>
-            <input
-              id="auth-password"
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
+            <div className="input-with-icon">
+              <Lock size={16} className="input-field-icon" />
+              <input
+                id="auth-password"
+                type="password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+              />
+            </div>
           </div>
 
           {mode === "signup" && (
             <div className="form-group">
               <label htmlFor="auth-confirm">Confirm Password</label>
-              <input
-                id="auth-confirm"
-                type="password"
-                placeholder="••••••••"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-              />
+              <div className="input-with-icon">
+                <Lock size={16} className="input-field-icon" />
+                <input
+                  id="auth-confirm"
+                  type="password"
+                  placeholder="••••••••"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  required
+                />
+              </div>
             </div>
           )}
 
@@ -164,7 +177,10 @@ export default function AuthModal({ isOpen, onClose, onAuthSuccess, initialMode 
                 <span>{mode === "login" ? "Signing in…" : "Creating account…"}</span>
               </>
             ) : (
-              <span>{mode === "login" ? "Sign In to Workspace" : "Get Started Free"}</span>
+              <>
+                <span>{mode === "login" ? "Sign In to Workspace" : "Get Started Free"}</span>
+                <ArrowRight size={16} />
+              </>
             )}
           </button>
 

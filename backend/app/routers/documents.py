@@ -1,7 +1,8 @@
 from typing import List, Optional
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy.orm import Session, joinedload
 
+from app.config import UPLOAD_RATE_LIMIT_PER_MINUTE
 from app.database import get_db
 from app.models.db_models import Deadline, Document, Rule, Task, User
 from app.models.schemas import (
@@ -14,112 +15,159 @@ from app.models.schemas import (
 )
 from app.services.ai_service import analyze_document
 from app.services.auth_service import get_current_user, get_current_user_optional
-from app.services.pdf_service import MAX_UPLOAD_BYTES, extract_pdf_content
+from app.services.pdf_service import (
+    MAX_UPLOAD_BYTES,
+    content_sha256,
+    extract_pdf_content,
+    looks_like_pdf,
+    sanitize_filename,
+)
+from app.services.rate_limit import check_rate_limit
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.post("/upload")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     current_user: Optional[User] = Depends(get_current_user_optional),
     db: Session = Depends(get_db),
 ):
-    if file.content_type != "application/pdf" and not (
-        file.filename and file.filename.lower().endswith(".pdf")
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Only PDF files are supported.",
-        )
+    check_rate_limit(request, "upload", UPLOAD_RATE_LIMIT_PER_MINUTE)
+
+    safe_name = sanitize_filename(file.filename)
 
     file_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
-    extracted_text, page_count = extract_pdf_content(file_bytes)
+    if len(file_bytes) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="The PDF exceeds the upload size limit.",
+        )
 
-    analysis = analyze_document(extracted_text)
+    if not looks_like_pdf(file_bytes):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only valid PDF files are supported.",
+        )
+
+    extracted_text, page_count, pdf_warnings = extract_pdf_content(file_bytes)
+    file_hash = content_sha256(file_bytes)
+
+    try:
+        analysis = analyze_document(extracted_text)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    all_warnings = list(pdf_warnings) + list(analysis.warnings or [])
+    analysis.warnings = all_warnings
     saved_doc_id = None
 
     if current_user:
-        new_doc = Document(
-            user_id=current_user.id,
-            filename=file.filename or "uploaded_document.pdf",
-            document_type=analysis.document_type,
-            pages=page_count,
-            text_length=len(extracted_text),
-            summary=analysis.summary,
-        )
-        db.add(new_doc)
-        db.commit()
-        db.refresh(new_doc)
-        saved_doc_id = new_doc.id
-
-        # Persist tasks
-        saved_tasks = []
-        for t in analysis.tasks:
-            task_row = Task(
-                document_id=new_doc.id,
+        try:
+            new_doc = Document(
                 user_id=current_user.id,
-                task_text=t.task,
-                deadline=t.deadline or "",
-                priority=t.priority,
-                category=t.category,
-                confidence=t.confidence,
-                is_completed=False,
-                detection_reason=t.detection_reason,
-                source_snippet=t.source_snippet,
+                filename=safe_name,
+                safe_filename=safe_name,
+                document_type=analysis.document_type,
+                pages=page_count,
+                text_length=len(extracted_text),
+                summary=analysis.summary,
+                status="completed",
+                processing_error="",
+                content_hash=file_hash,
+                extraction_warnings="\n".join(all_warnings),
             )
-            db.add(task_row)
-            saved_tasks.append((t, task_row))
+            db.add(new_doc)
+            db.flush()
+            saved_doc_id = new_doc.id
 
-        # Persist rules
-        saved_rules = []
-        for r in analysis.rules:
-            rule_row = Rule(
-                document_id=new_doc.id,
-                user_id=current_user.id,
-                rule_text=r.rule,
-                rule_type=r.rule_type,
-                category=r.category,
-                confidence=r.confidence,
-                detection_reason=r.detection_reason,
-                source_snippet=r.source_snippet,
+            saved_tasks = []
+            for t in analysis.tasks:
+                task_row = Task(
+                    document_id=new_doc.id,
+                    user_id=current_user.id,
+                    task_text=t.task,
+                    description=t.description or "",
+                    deadline=t.deadline or "",
+                    deadline_time=t.deadline_time or "",
+                    priority=t.priority,
+                    category=t.category,
+                    confidence=t.confidence,
+                    is_completed=False,
+                    detection_reason=t.detection_reason,
+                    source_snippet=t.source_snippet,
+                    page_number=t.page_number,
+                    date_explicit=t.date_explicit,
+                    review_status=t.review_status or "pending",
+                    extraction_method=t.extraction_method or "rule_based",
+                )
+                db.add(task_row)
+                saved_tasks.append((t, task_row))
+
+            saved_rules = []
+            for r in analysis.rules:
+                rule_row = Rule(
+                    document_id=new_doc.id,
+                    user_id=current_user.id,
+                    rule_text=r.rule,
+                    rule_type=r.rule_type,
+                    category=r.category,
+                    confidence=r.confidence,
+                    detection_reason=r.detection_reason,
+                    source_snippet=r.source_snippet,
+                    page_number=r.page_number,
+                )
+                db.add(rule_row)
+                saved_rules.append((r, rule_row))
+
+            saved_deadlines = []
+            for d in analysis.deadlines:
+                dl_row = Deadline(
+                    document_id=new_doc.id,
+                    user_id=current_user.id,
+                    deadline_date=d.deadline_date,
+                    deadline_time=d.deadline_time or "",
+                    description=d.description,
+                    is_completed=False,
+                    confidence=d.confidence,
+                    detection_reason=d.detection_reason,
+                    source_snippet=d.source_snippet,
+                    page_number=d.page_number,
+                    date_explicit=d.date_explicit,
+                )
+                db.add(dl_row)
+                saved_deadlines.append((d, dl_row))
+
+            db.commit()
+            db.refresh(new_doc)
+
+            for orig, row in saved_tasks:
+                orig.id = row.id
+            for orig, row in saved_rules:
+                orig.id = row.id
+            for orig, row in saved_deadlines:
+                orig.id = row.id
+        except Exception:
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Document analysis succeeded but saving failed. Please try again.",
             )
-            db.add(rule_row)
-            saved_rules.append((r, rule_row))
-
-        # Persist deadlines
-        saved_deadlines = []
-        for d in analysis.deadlines:
-            dl_row = Deadline(
-                document_id=new_doc.id,
-                user_id=current_user.id,
-                deadline_date=d.deadline_date,
-                description=d.description,
-                is_completed=False,
-                confidence=d.confidence,
-                detection_reason=d.detection_reason,
-                source_snippet=d.source_snippet,
-            )
-            db.add(dl_row)
-            saved_deadlines.append((d, dl_row))
-
-        db.commit()
-
-        # Update IDs in response
-        for orig, row in saved_tasks:
-            orig.id = row.id
-        for orig, row in saved_rules:
-            orig.id = row.id
-        for orig, row in saved_deadlines:
-            orig.id = row.id
 
     return {
         "success": True,
         "document_id": saved_doc_id,
-        "filename": file.filename,
+        "filename": safe_name,
         "pages": page_count,
         "text_length": len(extracted_text),
         "is_saved": bool(current_user),
+        "content_hash": file_hash if current_user else None,
+        "warnings": all_warnings,
         "analysis": analysis.model_dump(),
     }
 
@@ -131,11 +179,15 @@ def list_documents(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Document).filter(Document.user_id == current_user.id)
+    query = (
+        db.query(Document)
+        .options(joinedload(Document.tasks), joinedload(Document.rules), joinedload(Document.deadlines))
+        .filter(Document.user_id == current_user.id)
+    )
 
     if search:
-        search_filter = f"%{search.strip().lower()}%"
-        query = query.filter(Document.filename.ilike(search_filter))
+        escaped = _escape_like(search.strip().lower())
+        query = query.filter(Document.filename.ilike(f"%{escaped}%", escape="\\"))
 
     if doc_type:
         query = query.filter(Document.document_type == doc_type)
@@ -154,6 +206,7 @@ def list_documents(
                 pages=d.pages,
                 upload_timestamp=d.upload_timestamp,
                 summary=d.summary,
+                status=getattr(d, "status", None) or "completed",
                 task_count=total_tasks,
                 completed_task_count=completed_tasks,
                 rule_count=len(d.rules),
@@ -172,6 +225,7 @@ def get_document(
 ):
     doc = (
         db.query(Document)
+        .options(joinedload(Document.tasks), joinedload(Document.rules), joinedload(Document.deadlines))
         .filter(Document.id == document_id, Document.user_id == current_user.id)
         .first()
     )
@@ -185,13 +239,19 @@ def get_document(
         ExtractedTask(
             id=t.id,
             task=t.task_text,
+            description=getattr(t, "description", "") or "",
             deadline=t.deadline or "",
+            deadline_time=getattr(t, "deadline_time", "") or "",
             priority=t.priority,
             category=t.category,
             confidence=t.confidence,
             is_completed=t.is_completed,
             detection_reason=t.detection_reason,
             source_snippet=t.source_snippet,
+            page_number=getattr(t, "page_number", None),
+            date_explicit=bool(getattr(t, "date_explicit", False)),
+            review_status=getattr(t, "review_status", None) or "pending",
+            extraction_method=getattr(t, "extraction_method", None) or "rule_based",
         )
         for t in doc.tasks
     ]
@@ -205,6 +265,7 @@ def get_document(
             confidence=r.confidence,
             detection_reason=r.detection_reason,
             source_snippet=r.source_snippet,
+            page_number=getattr(r, "page_number", None),
         )
         for r in doc.rules
     ]
@@ -213,14 +274,20 @@ def get_document(
         ExtractedDeadline(
             id=dl.id,
             deadline_date=dl.deadline_date,
+            deadline_time=getattr(dl, "deadline_time", "") or "",
             description=dl.description,
             is_completed=dl.is_completed,
             confidence=dl.confidence,
             detection_reason=dl.detection_reason,
             source_snippet=dl.source_snippet,
+            page_number=getattr(dl, "page_number", None),
+            date_explicit=bool(getattr(dl, "date_explicit", False)),
         )
         for dl in doc.deadlines
     ]
+
+    warning_text = getattr(doc, "extraction_warnings", "") or ""
+    warnings = [w for w in warning_text.split("\n") if w.strip()]
 
     return DocumentDetailResponse(
         id=doc.id,
@@ -229,6 +296,9 @@ def get_document(
         pages=doc.pages,
         text_length=doc.text_length,
         summary=doc.summary,
+        status=getattr(doc, "status", None) or "completed",
+        processing_error=getattr(doc, "processing_error", "") or "",
+        extraction_warnings=warning_text,
         upload_timestamp=doc.upload_timestamp,
         analysis=DocumentAnalysis(
             document_type=doc.document_type,
@@ -236,6 +306,7 @@ def get_document(
             tasks=tasks_out,
             rules=rules_out,
             deadlines=deadlines_out,
+            warnings=warnings,
         ),
     )
 
@@ -257,10 +328,11 @@ def delete_document(
             detail="Document not found.",
         )
 
+    filename = doc.filename
     db.delete(doc)
     db.commit()
 
     return {
         "success": True,
-        "message": f"Document '{doc.filename}' deleted successfully.",
+        "message": f"Document '{filename}' deleted successfully.",
     }

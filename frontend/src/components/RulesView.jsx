@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ShieldAlert, ShieldCheck, AlertCircle, Sparkles, ExternalLink, AlertTriangle, Shield } from "lucide-react";
 import { api } from "../services/api";
 
 export default function RulesView({ onOpenDocument, onExplainItem }) {
@@ -68,11 +69,14 @@ export default function RulesView({ onOpenDocument, onExplainItem }) {
         </div>
       ) : error ? (
         <div className="upload-error" role="alert">
-          ⚠ {error}
+          <AlertTriangle size={16} />
+          <span>{error}</span>
         </div>
       ) : rules.length === 0 ? (
         <div className="empty-state-card">
-          <span className="empty-icon">!</span>
+          <span className="empty-icon">
+            <Shield size={32} />
+          </span>
           <h3>No rules found</h3>
           <p>No compliance requirements or prohibitions match your selected filter.</p>
         </div>
@@ -84,7 +88,12 @@ export default function RulesView({ onOpenDocument, onExplainItem }) {
             return (
               <article className={`rule-card ${ruleTypeClass}`} key={rule.id}>
                 <div className="rule-top">
-                  <span className={`rule-type-badge ${ruleTypeClass}`}>{rule.rule_type}</span>
+                  <span className={`rule-type-badge ${ruleTypeClass}`}>
+                    {rule.rule_type === "MANDATORY" && <AlertCircle size={12} />}
+                    {rule.rule_type === "PROHIBITED" && <ShieldAlert size={12} />}
+                    {rule.rule_type === "RECOMMENDED" && <ShieldCheck size={12} />}
+                    <span>{rule.rule_type}</span>
+                  </span>
                   <div className="rule-top-right">
                     <span className="confidence">
                       {Math.round((rule.confidence ?? 0.85) * 100)}% confidence
@@ -94,7 +103,8 @@ export default function RulesView({ onOpenDocument, onExplainItem }) {
                       onClick={() => onExplainItem(rule, "Compliance Rule")}
                       type="button"
                     >
-                      Why detected?
+                      <Sparkles size={12} />
+                      <span>Why detected?</span>
                     </button>
                   </div>
                 </div>
@@ -113,7 +123,8 @@ export default function RulesView({ onOpenDocument, onExplainItem }) {
                       onClick={() => onOpenDocument(rule.document_id)}
                       type="button"
                     >
-                      {rule.document_name}
+                      <span>{rule.document_name}</span>
+                      <ExternalLink size={12} />
                     </button>
                   </div>
                 </div>

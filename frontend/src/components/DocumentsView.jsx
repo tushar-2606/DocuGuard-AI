@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Search, X, UploadCloud, FileText, Trash2, AlertTriangle, ChevronRight } from "lucide-react";
 import { api } from "../services/api";
 
 export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
@@ -55,13 +56,14 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
           <p>Search, review, and manage your analyzed PDFs and compliance notices.</p>
         </div>
         <button className="primary-button" onClick={onQuickUploadClick} type="button">
-          ↑ Upload New PDF
+          <UploadCloud size={16} />
+          <span>Upload New PDF</span>
         </button>
       </div>
 
       <div className="filter-search-bar">
         <div className="search-input-wrapper">
-          <span className="search-icon">🔍</span>
+          <Search size={16} className="search-icon" />
           <input
             type="text"
             placeholder="Search documents by filename…"
@@ -70,7 +72,7 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
           />
           {search && (
             <button className="clear-search" onClick={() => setSearch("")} type="button">
-              ✕
+              <X size={14} />
             </button>
           )}
         </div>
@@ -97,11 +99,14 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
         </div>
       ) : error ? (
         <div className="upload-error" role="alert">
-          ⚠ {error}
+          <AlertTriangle size={16} />
+          <span>{error}</span>
         </div>
       ) : documents.length === 0 ? (
         <div className="empty-state-card">
-          <span className="empty-icon">▤</span>
+          <span className="empty-icon">
+            <FileText size={32} />
+          </span>
           <h3>{search || typeFilter ? "No matching documents found" : "No documents saved yet"}</h3>
           <p>
             {search || typeFilter
@@ -109,7 +114,8 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
               : "Upload an institutional PDF to start building your persistent intelligence workspace."}
           </p>
           <button className="primary-button" onClick={onQuickUploadClick} type="button">
-            Upload Document Now
+            <UploadCloud size={16} />
+            <span>Upload Document Now</span>
           </button>
         </div>
       ) : (
@@ -169,11 +175,12 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
                     </td>
                     <td className="actions-cell">
                       <button
-                        className="text-button"
+                        className="open-analysis-btn"
                         onClick={() => onOpenDocument(doc.id)}
                         type="button"
                       >
-                        Open Analysis
+                        <span>Open</span>
+                        <ChevronRight size={13} />
                       </button>
                       <button
                         className="delete-button"
@@ -182,7 +189,7 @@ export default function DocumentsView({ onOpenDocument, onQuickUploadClick }) {
                         type="button"
                         title="Delete Document"
                       >
-                        {deletingId === doc.id ? "…" : "🗑"}
+                        <Trash2 size={14} />
                       </button>
                     </td>
                   </tr>
