@@ -3,7 +3,7 @@ from typing import Optional
 import bcrypt
 import jwt
 from fastapi import Depends, HTTPException, status
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -14,7 +14,7 @@ from app.config import (
 from app.database import get_db
 from app.models.db_models import User
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login", auto_error=False)
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
@@ -53,7 +53,7 @@ def decode_access_token(token: str) -> Optional[dict]:
 
 
 def get_current_user(
-    token: Optional[str] = Depends(oauth2_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme)    ,
     db: Session = Depends(get_db),
 ) -> User:
     credentials_exception = HTTPException(
@@ -61,6 +61,7 @@ def get_current_user(
         detail="Authentication credentials were not provided or have expired.",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token = credentials.credentials if credentials else None
     if not token:
         raise credentials_exception
 
@@ -85,9 +86,10 @@ def get_current_user(
 
 
 def get_current_user_optional(
-    token: Optional[str] = Depends(oauth2_scheme),
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
     db: Session = Depends(get_db),
 ) -> Optional[User]:
+    token = credentials.credentials if credentials else None
     if not token:
         return None
 

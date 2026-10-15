@@ -1,7 +1,11 @@
-from sqlalchemy import create_engine, event, text
+import logging
+
+from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 from app.config import DATABASE_URL
+
+logger = logging.getLogger(__name__)
 
 connect_args = {}
 if DATABASE_URL.startswith("sqlite"):
@@ -56,6 +60,89 @@ def _add_column_if_missing(table: str, column: str, ddl_type: str) -> None:
         conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}"))
 
 
+def _upgrade_notification_schema(bind) -> None:
+    """Add current reminder identity fields without replacing stored notifications."""
+    inspector = inspect(bind)
+    if "notifications" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("notifications")}
+    missing_identity_fields = not {
+        "reminder_key",
+        "reminder_date",
+    }.issubset(columns)
+    if not missing_identity_fields:
+        return
+
+    with bind.begin() as conn:
+        if "reminder_key" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE notifications ADD COLUMN "
+                    "reminder_key VARCHAR(128) NOT NULL DEFAULT ''"
+                )
+            )
+        if "reminder_date" not in columns:
+            conn.execute(
+                text(
+                    "ALTER TABLE notifications ADD COLUMN "
+                    "reminder_date VARCHAR(10) NOT NULL DEFAULT ''"
+                )
+            )
+
+        rows = conn.execute(
+            text(
+                "SELECT n.id, n.user_id, n.target_key, n.stage, n.reminder_key, "
+                "n.reminder_date, n.deadline_at, t.deadline, d.deadline_date "
+                "FROM notifications AS n "
+                "LEFT JOIN tasks AS t ON t.id = n.task_id "
+                "LEFT JOIN deadlines AS d ON d.id = n.deadline_id "
+                "WHERE n.reminder_key = '' OR n.reminder_date = ''"
+            )
+        ).mappings()
+        for row in rows:
+            reminder_date = row["reminder_date"]
+            if not reminder_date:
+                source_date = row["deadline"] or row["deadline_date"] or row["deadline_at"]
+                reminder_date = str(source_date)[:10]
+
+            reminder_key = row["reminder_key"] or (
+                f"{row['target_key']}:{row['stage']}:{reminder_date}"
+            )
+            conn.execute(
+                text(
+                    "UPDATE notifications "
+                    "SET reminder_key = :reminder_key, reminder_date = :reminder_date "
+                    "WHERE id = :notification_id"
+                ),
+                {
+                    "reminder_key": reminder_key,
+                    "reminder_date": reminder_date,
+                    "notification_id": row["id"],
+                },
+            )
+
+        duplicates = conn.execute(
+            text(
+                "SELECT 1 FROM notifications "
+                "GROUP BY user_id, reminder_key HAVING COUNT(*) > 1 LIMIT 1"
+            )
+        ).first()
+        if duplicates:
+            logger.warning(
+                "Skipped notification reminder-key index creation because "
+                "duplicate keys already exist."
+            )
+        else:
+            conn.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS "
+                    "uq_notifications_user_reminder_key "
+                    "ON notifications (user_id, reminder_key)"
+                )
+            )
+
+
 def ensure_schema_upgrades() -> None:
     """
     Safe additive upgrades for existing SQLite/Postgres databases.
@@ -103,6 +190,8 @@ def ensure_schema_upgrades() -> None:
 
     if "rules" in tables:
         _add_column_if_missing("rules", "page_number", "INTEGER")
+
+    _upgrade_notification_schema(engine)
 
 
 def init_db():

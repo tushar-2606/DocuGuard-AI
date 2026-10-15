@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from typing import List
 
@@ -24,6 +25,7 @@ from app.services.auth_service import get_current_user
 from app.services.reminder_service import get_or_create_preferences, smtp_is_configured
 
 router = APIRouter(prefix="/api", tags=["Notifications"])
+logger = logging.getLogger(__name__)
 
 
 def _preference_item(preferences: ReminderPreference) -> ReminderPreferenceItem:
@@ -73,63 +75,71 @@ def list_notifications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    rows = (
-        db.query(Notification, Document.filename)
-        .join(Document, Notification.document_id == Document.id)
-        .filter(
-            Notification.user_id == current_user.id,
-            Document.user_id == current_user.id,
+    try:
+        rows = (
+            db.query(Notification, Document.filename)
+            .join(Document, Notification.document_id == Document.id)
+            .filter(
+                Notification.user_id == current_user.id,
+                Document.user_id == current_user.id,
+            )
         )
-    )
-    if unread_only:
-        rows = rows.filter(Notification.is_read == False)  # noqa: E712
-    rows = rows.order_by(Notification.created_at.desc()).limit(limit).all()
+        if unread_only:
+            rows = rows.filter(Notification.is_read == False)  # noqa: E712
+        rows = rows.order_by(Notification.created_at.desc()).limit(limit).all()
 
-    items = []
-    for notification, document_name in rows:
-        task = (
-            db.query(Task)
-            .filter(
-                Task.id == notification.task_id,
-                Task.user_id == current_user.id,
-                Task.document_id == notification.document_id,
+        items = []
+        for notification, document_name in rows:
+            task = (
+                db.query(Task)
+                .filter(
+                    Task.id == notification.task_id,
+                    Task.user_id == current_user.id,
+                    Task.document_id == notification.document_id,
+                )
+                .first()
+                if notification.task_id
+                else None
             )
-            .first()
-            if notification.task_id
-            else None
-        )
-        deadline = (
-            db.query(Deadline)
-            .filter(
-                Deadline.id == notification.deadline_id,
-                Deadline.user_id == current_user.id,
-                Deadline.document_id == notification.document_id,
+            deadline = (
+                db.query(Deadline)
+                .filter(
+                    Deadline.id == notification.deadline_id,
+                    Deadline.user_id == current_user.id,
+                    Deadline.document_id == notification.document_id,
+                )
+                .first()
+                if notification.deadline_id
+                else None
             )
-            .first()
-            if notification.deadline_id
-            else None
-        )
-        items.append(
-            NotificationItem(
-                id=notification.id,
-                title=notification.title,
-                message=notification.message,
-                stage=notification.stage,
-                target_type="task" if task else "deadline",
-                target_id=task.id if task else deadline.id,
-                document_id=notification.document_id,
-                document_name=document_name,
-                deadline_date=(task.deadline if task else deadline.deadline_date) or "",
-                deadline_time=(
-                    (task.deadline_time if task else deadline.deadline_time) or ""
-                ),
-                is_read=notification.is_read,
-                created_at=notification.created_at,
-                email_status=notification.email_status,
-                email_last_error=notification.email_last_error or "",
+            items.append(
+                NotificationItem(
+                    id=notification.id,
+                    title=notification.title,
+                    message=notification.message,
+                    stage=notification.stage,
+                    target_type="task" if task else "deadline",
+                    target_id=task.id if task else deadline.id,
+                    document_id=notification.document_id,
+                    document_name=document_name,
+                    deadline_date=(
+                        (task.deadline if task else deadline.deadline_date) or ""
+                    ),
+                    deadline_time=(
+                        (task.deadline_time if task else deadline.deadline_time) or ""
+                    ),
+                    is_read=notification.is_read,
+                    created_at=notification.created_at,
+                    email_status=notification.email_status,
+                    email_last_error=notification.email_last_error or "",
+                )
             )
+        return items
+    except Exception:
+        logger.exception(
+            "Failed to list notifications for user_id=%s.", current_user.id
         )
-    return items
+        raise
 
 
 @router.get("/notifications/unread-count")

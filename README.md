@@ -58,6 +58,7 @@ See `backend/.env.example`. Important keys:
 | `DATABASE_URL` | `sqlite:///./docuguard.db` or Postgres URL |
 | `CORS_ORIGINS` | Comma-separated allowed origins |
 | `ENVIRONMENT` | `development` or `production` |
+| `TRUSTED_PROXY_CIDRS` | Comma-separated proxy CIDRs allowed to supply `X-Forwarded-For` (default: empty) |
 | `APP_TIMEZONE` | IANA timezone used for new reminder preferences (default `UTC`) |
 | `DEFAULT_DATE_ONLY_REMINDER_TIME` | Local time for deadlines without an explicit time (default `09:00`) |
 | `REMINDER_CHECK_INTERVAL_SECONDS` | Scheduler polling interval; minimum 15 seconds (default `60`) |

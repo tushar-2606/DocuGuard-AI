@@ -1,5 +1,6 @@
 from typing import List, Optional
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile, status
+from sqlalchemy import text
 from sqlalchemy.orm import Session, joinedload
 
 from app.config import UPLOAD_RATE_LIMIT_PER_MINUTE
@@ -29,6 +30,75 @@ router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
 def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _lock_user_uploads(db: Session, user_id: int) -> None:
+    if db.get_bind().dialect.name == "sqlite":
+        db.execute(text("BEGIN IMMEDIATE"))
+        return
+
+    db.query(User.id).filter(User.id == user_id).with_for_update().one()
+
+
+def _document_analysis(doc: Document) -> DocumentAnalysis:
+    tasks_out = [
+        ExtractedTask(
+            id=t.id,
+            task=t.task_text,
+            description=getattr(t, "description", "") or "",
+            deadline=t.deadline or "",
+            deadline_time=getattr(t, "deadline_time", "") or "",
+            priority=t.priority,
+            category=t.category,
+            confidence=t.confidence,
+            is_completed=t.is_completed,
+            detection_reason=t.detection_reason,
+            source_snippet=t.source_snippet,
+            page_number=getattr(t, "page_number", None),
+            date_explicit=bool(getattr(t, "date_explicit", False)),
+            review_status=getattr(t, "review_status", None) or "pending",
+            extraction_method=getattr(t, "extraction_method", None) or "rule_based",
+        )
+        for t in doc.tasks
+    ]
+    rules_out = [
+        ExtractedRule(
+            id=r.id,
+            rule=r.rule_text,
+            rule_type=r.rule_type,
+            category=r.category,
+            confidence=r.confidence,
+            detection_reason=r.detection_reason,
+            source_snippet=r.source_snippet,
+            page_number=getattr(r, "page_number", None),
+        )
+        for r in doc.rules
+    ]
+    deadlines_out = [
+        ExtractedDeadline(
+            id=dl.id,
+            deadline_date=dl.deadline_date,
+            deadline_time=getattr(dl, "deadline_time", "") or "",
+            description=dl.description,
+            is_completed=dl.is_completed,
+            confidence=dl.confidence,
+            detection_reason=dl.detection_reason,
+            source_snippet=dl.source_snippet,
+            page_number=getattr(dl, "page_number", None),
+            date_explicit=bool(getattr(dl, "date_explicit", False)),
+        )
+        for dl in doc.deadlines
+    ]
+    warning_text = getattr(doc, "extraction_warnings", "") or ""
+
+    return DocumentAnalysis(
+        document_type=doc.document_type,
+        summary=doc.summary,
+        tasks=tasks_out,
+        rules=rules_out,
+        deadlines=deadlines_out,
+        warnings=[warning for warning in warning_text.split("\n") if warning.strip()],
+    )
 
 
 @router.post("/upload")
@@ -69,6 +139,35 @@ async def upload_document(
 
     if current_user:
         try:
+            _lock_user_uploads(db, current_user.id)
+            existing_doc = (
+                db.query(Document)
+                .options(
+                    joinedload(Document.tasks),
+                    joinedload(Document.rules),
+                    joinedload(Document.deadlines),
+                )
+                .filter(
+                    Document.user_id == current_user.id,
+                    Document.content_hash == file_hash,
+                )
+                .order_by(Document.id.asc())
+                .first()
+            )
+            if existing_doc:
+                existing_analysis = _document_analysis(existing_doc)
+                return {
+                    "success": True,
+                    "document_id": existing_doc.id,
+                    "filename": existing_doc.filename,
+                    "pages": existing_doc.pages,
+                    "text_length": existing_doc.text_length,
+                    "is_saved": True,
+                    "content_hash": existing_doc.content_hash,
+                    "warnings": existing_analysis.warnings,
+                    "analysis": existing_analysis.model_dump(),
+                }
+
             new_doc = Document(
                 user_id=current_user.id,
                 filename=safe_name,
@@ -234,60 +333,8 @@ def get_document(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Document not found.",
         )
-
-    tasks_out = [
-        ExtractedTask(
-            id=t.id,
-            task=t.task_text,
-            description=getattr(t, "description", "") or "",
-            deadline=t.deadline or "",
-            deadline_time=getattr(t, "deadline_time", "") or "",
-            priority=t.priority,
-            category=t.category,
-            confidence=t.confidence,
-            is_completed=t.is_completed,
-            detection_reason=t.detection_reason,
-            source_snippet=t.source_snippet,
-            page_number=getattr(t, "page_number", None),
-            date_explicit=bool(getattr(t, "date_explicit", False)),
-            review_status=getattr(t, "review_status", None) or "pending",
-            extraction_method=getattr(t, "extraction_method", None) or "rule_based",
-        )
-        for t in doc.tasks
-    ]
-
-    rules_out = [
-        ExtractedRule(
-            id=r.id,
-            rule=r.rule_text,
-            rule_type=r.rule_type,
-            category=r.category,
-            confidence=r.confidence,
-            detection_reason=r.detection_reason,
-            source_snippet=r.source_snippet,
-            page_number=getattr(r, "page_number", None),
-        )
-        for r in doc.rules
-    ]
-
-    deadlines_out = [
-        ExtractedDeadline(
-            id=dl.id,
-            deadline_date=dl.deadline_date,
-            deadline_time=getattr(dl, "deadline_time", "") or "",
-            description=dl.description,
-            is_completed=dl.is_completed,
-            confidence=dl.confidence,
-            detection_reason=dl.detection_reason,
-            source_snippet=dl.source_snippet,
-            page_number=getattr(dl, "page_number", None),
-            date_explicit=bool(getattr(dl, "date_explicit", False)),
-        )
-        for dl in doc.deadlines
-    ]
-
+    analysis = _document_analysis(doc)
     warning_text = getattr(doc, "extraction_warnings", "") or ""
-    warnings = [w for w in warning_text.split("\n") if w.strip()]
 
     return DocumentDetailResponse(
         id=doc.id,
@@ -300,14 +347,7 @@ def get_document(
         processing_error=getattr(doc, "processing_error", "") or "",
         extraction_warnings=warning_text,
         upload_timestamp=doc.upload_timestamp,
-        analysis=DocumentAnalysis(
-            document_type=doc.document_type,
-            summary=doc.summary,
-            tasks=tasks_out,
-            rules=rules_out,
-            deadlines=deadlines_out,
-            warnings=warnings,
-        ),
+        analysis=analysis,
     )
 
 

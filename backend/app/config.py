@@ -1,6 +1,7 @@
 import os
 import secrets
 import sys
+from ipaddress import ip_network
 from datetime import time
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -51,6 +52,17 @@ MAX_PDF_PAGES = int(os.getenv("MAX_PDF_PAGES", "100"))
 
 AUTH_RATE_LIMIT_PER_MINUTE = int(os.getenv("AUTH_RATE_LIMIT_PER_MINUTE", "20"))
 UPLOAD_RATE_LIMIT_PER_MINUTE = int(os.getenv("UPLOAD_RATE_LIMIT_PER_MINUTE", "10"))
+_trusted_proxy_cidrs = [
+    cidr.strip()
+    for cidr in os.getenv("TRUSTED_PROXY_CIDRS", "").split(",")
+    if cidr.strip()
+]
+try:
+    TRUSTED_PROXY_NETWORKS = tuple(
+        ip_network(cidr, strict=False) for cidr in _trusted_proxy_cidrs
+    )
+except ValueError as exc:
+    raise ValueError("TRUSTED_PROXY_CIDRS must contain valid IP networks.") from exc
 
 # Minimum password length for new registrations (existing hashes still verify).
 MIN_PASSWORD_LENGTH = int(os.getenv("MIN_PASSWORD_LENGTH", "8"))

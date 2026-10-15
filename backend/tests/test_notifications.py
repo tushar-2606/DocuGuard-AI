@@ -1,7 +1,13 @@
 from datetime import datetime, timezone
+import logging
+from types import SimpleNamespace
+
+import pytest
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
 from app import config
-from app.database import SessionLocal
+from app.database import SessionLocal, _upgrade_notification_schema
 from app.models.db_models import (
     Deadline,
     Document,
@@ -10,6 +16,7 @@ from app.models.db_models import (
     Task,
     User,
 )
+from app.routers.notifications import list_notifications
 from app.services.reminder_service import process_due_reminders
 
 
@@ -125,6 +132,95 @@ def test_reminder_api_marks_read_and_does_not_leak_to_other_users(
     assert client.patch(
         f"/api/notifications/{notification_id}/read", headers=auth_headers
     ).json()["is_read"] is True
+
+
+def test_legacy_notification_schema_is_upgraded_without_losing_rows():
+    legacy_engine = create_engine("sqlite:///:memory:")
+    try:
+        with legacy_engine.begin() as db:
+            db.execute(text("CREATE TABLE tasks (id INTEGER PRIMARY KEY, deadline VARCHAR(100))"))
+            db.execute(text("CREATE TABLE deadlines (id INTEGER PRIMARY KEY, deadline_date VARCHAR(100))"))
+            db.execute(
+                text(
+                    "CREATE TABLE notifications ("
+                    "id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
+                    "document_id INTEGER NOT NULL, task_id INTEGER, deadline_id INTEGER, "
+                    "target_key VARCHAR(64) NOT NULL, title VARCHAR(255) NOT NULL, "
+                    "message TEXT NOT NULL, stage VARCHAR(30) NOT NULL, "
+                    "deadline_at DATETIME NOT NULL, is_read BOOLEAN NOT NULL DEFAULT 0, "
+                    "desktop_notified_at DATETIME, email_status VARCHAR(20) NOT NULL, "
+                    "email_attempts INTEGER NOT NULL DEFAULT 0, "
+                    "email_last_error TEXT NOT NULL DEFAULT '', email_sent_at DATETIME, "
+                    "created_at DATETIME NOT NULL)"
+                )
+            )
+            db.execute(
+                text("INSERT INTO tasks (id, deadline) VALUES (7, '2026-10-16')")
+            )
+            db.execute(
+                text(
+                    "INSERT INTO notifications "
+                    "(id,user_id,document_id,task_id,target_key,title,message,stage,"
+                    "deadline_at,email_status,created_at) "
+                    "VALUES (1,3,4,7,'task:7','Reminder','Due soon','three_days',"
+                    "'2026-10-16 09:00:00','disabled','2026-10-13 09:00:00')"
+                )
+            )
+
+        _upgrade_notification_schema(legacy_engine)
+        _upgrade_notification_schema(legacy_engine)
+
+        with legacy_engine.connect() as db:
+            columns = {
+                column["name"]
+                for column in inspect(db).get_columns("notifications")
+            }
+            assert {"reminder_key", "reminder_date"} <= columns
+            row = db.execute(
+                text(
+                    "SELECT title, reminder_key, reminder_date "
+                    "FROM notifications WHERE id = 1"
+                )
+            ).one()
+            assert row == (
+                "Reminder",
+                "task:7:three_days:2026-10-16",
+                "2026-10-16",
+            )
+            indexes = {
+                index["name"] for index in inspect(db).get_indexes("notifications")
+            }
+            assert "uq_notifications_user_reminder_key" in indexes
+        with sessionmaker(bind=legacy_engine)() as db:
+            notification = db.query(Notification).one()
+            assert notification.reminder_key == "task:7:three_days:2026-10-16"
+            assert notification.reminder_date == "2026-10-16"
+    finally:
+        legacy_engine.dispose()
+
+
+def test_notification_listing_logs_traceback_without_request_credentials(caplog):
+    class FailingSession:
+        def query(self, *args, **kwargs):
+            raise RuntimeError("synthetic database failure")
+
+    caplog.set_level(logging.ERROR, logger="app.routers.notifications")
+    with pytest.raises(RuntimeError, match="synthetic database failure"):
+        list_notifications(
+            unread_only=False,
+            limit=50,
+            current_user=SimpleNamespace(id=42),
+            db=FailingSession(),
+        )
+
+    entry = next(
+        record
+        for record in caplog.records
+        if record.name == "app.routers.notifications"
+    )
+    assert "user_id=42" in entry.getMessage()
+    assert entry.exc_info is not None
+    assert "Authorization" not in entry.getMessage()
 
 
 def test_desktop_delivery_requires_opt_in_and_is_idempotent(

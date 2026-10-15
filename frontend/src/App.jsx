@@ -214,7 +214,13 @@ function App() {
         is_saved: data.is_saved,
       });
       setAnalysis(data.analysis);
-      setCompletedTasks(new Set());
+      setCompletedTasks(
+        new Set(
+          data.analysis.tasks.flatMap((task, index) =>
+            task.is_completed ? [index] : [],
+          ),
+        ),
+      );
       setFile(null);
       setUploadOpen(false);
       if (fileInputRef.current) fileInputRef.current.value = "";

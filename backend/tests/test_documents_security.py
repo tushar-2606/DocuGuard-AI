@@ -1,4 +1,11 @@
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import fitz
+from fastapi.testclient import TestClient
+
+import app.routers.documents as documents_router
+from app.main import app
 
 
 def _make_pdf(text: str) -> bytes:
@@ -46,25 +53,89 @@ def test_upload_and_persist_for_owner(client, auth_headers):
     assert len(listed.json()) >= 1
 
 
-def test_repeated_pdf_uploads_remain_separate_documents(client, auth_headers):
+def test_repeated_pdf_upload_returns_existing_document(client, auth_headers):
     pdf = _make_pdf("Students must submit the examination form by 15 March 2027.")
-    document_ids = []
-    for _ in range(2):
-        upload = client.post(
+    first_upload = client.post(
+        "/api/documents/upload",
+        headers=auth_headers,
+        files={"file": ("same.pdf", pdf, "application/pdf")},
+    )
+    assert first_upload.status_code == 200, first_upload.text
+    first_response = first_upload.json()
+    task_id = first_response["analysis"]["tasks"][0]["id"]
+    completed = client.patch(
+        f"/api/tasks/{task_id}/toggle",
+        headers=auth_headers,
+    )
+    assert completed.status_code == 200
+
+    duplicate_upload = client.post(
+        "/api/documents/upload",
+        headers=auth_headers,
+        files={"file": ("same.pdf", pdf, "application/pdf")},
+    )
+    assert duplicate_upload.status_code == 200, duplicate_upload.text
+    duplicate_response = duplicate_upload.json()
+
+    assert duplicate_response["document_id"] == first_response["document_id"]
+    assert duplicate_response["analysis"]["tasks"][0]["id"] == task_id
+    assert duplicate_response["analysis"]["tasks"][0]["is_completed"] is True
+    assert duplicate_response["content_hash"] == first_response["content_hash"]
+    assert duplicate_response.keys() == first_response.keys()
+    documents = client.get("/api/documents", headers=auth_headers).json()
+    assert [doc["id"] for doc in documents] == [first_response["document_id"]]
+    tasks = client.get("/api/tasks", headers=auth_headers).json()
+    matching = [task for task in tasks if task["document_id"] == first_response["document_id"]]
+    assert len(matching) == len(first_response["analysis"]["tasks"]) == 1
+
+
+def test_same_pdf_upload_by_different_users_creates_separate_documents(
+    client, auth_headers, second_user_headers
+):
+    pdf = _make_pdf("Students must submit the examination form by 15 March 2027.")
+    uploads = [
+        client.post(
+            "/api/documents/upload",
+            headers=headers,
+            files={"file": ("same.pdf", pdf, "application/pdf")},
+        )
+        for headers in (auth_headers, second_user_headers)
+    ]
+
+    assert all(upload.status_code == 200 for upload in uploads)
+    assert uploads[0].json()["document_id"] != uploads[1].json()["document_id"]
+
+
+def test_concurrent_same_pdf_uploads_create_one_document(
+    client, auth_headers, monkeypatch
+):
+    pdf = _make_pdf("Students must submit the examination form by 15 March 2027.")
+    barrier = Barrier(2)
+    original_analyze_document = documents_router.analyze_document
+
+    def synchronized_analysis(text):
+        result = original_analyze_document(text)
+        barrier.wait(timeout=10)
+        return result
+
+    monkeypatch.setattr(documents_router, "analyze_document", synchronized_analysis)
+
+    def upload():
+        concurrent_client = TestClient(app)
+        return concurrent_client.post(
             "/api/documents/upload",
             headers=auth_headers,
             files={"file": ("same.pdf", pdf, "application/pdf")},
         )
-        assert upload.status_code == 200, upload.text
-        document_ids.append(upload.json()["document_id"])
 
-    assert document_ids[0] != document_ids[1]
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        responses = list(pool.map(lambda _: upload(), range(2)))
+
+    assert all(response.status_code == 200 for response in responses)
+    document_ids = {response.json()["document_id"] for response in responses}
+    assert len(document_ids) == 1
     documents = client.get("/api/documents", headers=auth_headers).json()
-    assert {doc["id"] for doc in documents} == set(document_ids)
-    tasks = client.get("/api/tasks", headers=auth_headers).json()
-    matching = [task for task in tasks if task["document_id"] in document_ids]
-    assert len(matching) == 2
-    assert len({task["document_id"] for task in matching}) == 2
+    assert [doc["id"] for doc in documents] == list(document_ids)
 
 
 def test_cross_user_document_access_denied(client, auth_headers, second_user_headers):
